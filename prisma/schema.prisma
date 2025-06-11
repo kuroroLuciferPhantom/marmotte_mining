@@ -1,0 +1,195 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  discordId String   @unique
+  username  String
+  tokens    Float    @default(100.0)
+  experience Int     @default(0)
+  level     Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  machines        Machine[]
+  battleEntries   BattleEntry[]
+  activityRewards ActivityReward[]
+  transactions    Transaction[]
+  eventParticipations EventParticipation[]
+
+  // Stats
+  totalMined      Float @default(0.0)
+  battlesWon      Int   @default(0)
+  battlesLost     Int   @default(0)
+  lastActive      DateTime @default(now())
+  miningActive    Boolean @default(false)
+  lastMiningCheck DateTime @default(now())
+
+  @@map("users")
+}
+
+model Machine {
+  id          String      @id @default(cuid())
+  userId      String
+  type        MachineType
+  level       Int         @default(1)
+  efficiency  Float       @default(1.0)
+  durability  Float       @default(100.0)
+  purchasedAt DateTime    @default(now())
+  lastMaintenance DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("machines")
+}
+
+model Battle {
+  id          String        @id @default(cuid())
+  status      BattleStatus  @default(WAITING)
+  maxPlayers  Int           @default(10)
+  prizePool   Float         @default(0.0)
+  startTime   DateTime?
+  endTime     DateTime?
+  winnerId    String?
+  createdAt   DateTime      @default(now())
+  
+  entries BattleEntry[]
+
+  @@map("battles")
+}
+
+model BattleEntry {
+  id       String @id @default(cuid())
+  battleId String
+  userId   String
+  position Int?
+  eliminated Boolean @default(false)
+  eliminatedAt DateTime?
+  joinedAt DateTime @default(now())
+
+  battle Battle @relation(fields: [battleId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([battleId, userId])
+  @@map("battle_entries")
+}
+
+model TokenPrice {
+  id        String   @id @default(cuid())
+  price     Float
+  timestamp DateTime @default(now())
+  volume    Float    @default(0.0)
+  change24h Float    @default(0.0)
+
+  @@map("token_prices")
+}
+
+model Transaction {
+  id          String          @id @default(cuid())
+  userId      String
+  type        TransactionType
+  amount      Float
+  description String
+  timestamp   DateTime        @default(now())
+  metadata    Json?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("transactions")
+}
+
+model ActivityReward {
+  id         String       @id @default(cuid())
+  userId     String
+  type       ActivityType
+  amount     Float
+  timestamp  DateTime     @default(now())
+  multiplier Float        @default(1.0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("activity_rewards")
+}
+
+model GameEvent {
+  id          String    @id @default(cuid())
+  type        EventType
+  title       String
+  description String
+  isActive    Boolean   @default(true)
+  startTime   DateTime  @default(now())
+  endTime     DateTime?
+  multiplier  Float     @default(1.0)
+  metadata    Json?
+
+  participations EventParticipation[]
+
+  @@map("game_events")
+}
+
+model EventParticipation {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  reward    Float    @default(0.0)
+  timestamp DateTime @default(now())
+
+  event GameEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@map("event_participations")
+}
+
+enum MachineType {
+  BASIC_RIG
+  ADVANCED_RIG
+  QUANTUM_MINER
+  FUSION_REACTOR
+  MEGA_FARM
+}
+
+enum BattleStatus {
+  WAITING
+  ACTIVE
+  FINISHED
+  CANCELLED
+}
+
+enum TransactionType {
+  MINING_REWARD
+  MACHINE_PURCHASE
+  BATTLE_ENTRY
+  BATTLE_REWARD
+  ACTIVITY_REWARD
+  EVENT_REWARD
+  MAINTENANCE_COST
+  UPGRADE_COST
+}
+
+enum ActivityType {
+  MESSAGE
+  REACTION
+  VOICE_TIME
+  DAILY_LOGIN
+  STREAK_BONUS
+}
+
+enum EventType {
+  PRICE_BOOST
+  MINING_BONUS
+  BATTLE_FRENZY
+  MAINTENANCE_FREE
+  DOUBLE_REWARDS
+  FLASH_SALE
+}
