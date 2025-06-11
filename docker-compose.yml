@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:13
+    container_name: marmotte-postgres
+    environment:
+      POSTGRES_DB: marmotte_mining
+      POSTGRES_USER: marmotte_user
+      POSTGRES_PASSWORD: marmotte_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - marmotte_network
+
+  # Redis Cache
+  redis:
+    image: redis:6-alpine
+    container_name: marmotte-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - marmotte_network
+
+  # Bot Application (only for production)
+  # For development, run the bot locally with npm run dev
+  bot:
+    build: .
+    container_name: marmotte-bot
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://marmotte_user:marmotte_password@postgres:5432/marmotte_mining?schema=public
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - marmotte_network
+    # Uncomment for production deployment
+    # restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  marmotte_network:
+    driver: bridge
