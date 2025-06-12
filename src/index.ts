@@ -5,6 +5,7 @@ import { DatabaseService } from './services/database/DatabaseService';
 import { MiningService } from './services/mining/MiningService';
 import { BattleService } from './services/battle/BattleService';
 import { ActivityService } from './services/activity/ActivityService';
+import { CommandManager } from './managers/CommandManager';
 
 // Mock Redis service for fallback
 class MockRedisService {
@@ -87,7 +88,7 @@ class MockRedisService {
 
   async getLeaderboard(limit: number = 10): Promise<Array<{ userId: string; score: number }>> {
     const result = await this.zRevRange('leaderboard:tokens', 0, limit - 1);
-    return result.map((userId, index) => ({ userId, score: 0 })); // Simplified for mock
+    return result.map((userId, index) => ({ userId, score: 0 }));
   }
 }
 
@@ -95,6 +96,7 @@ class MarmotteMiningBot {
   public client: Client;
   public commands: Collection<string, any>;
   private services: Map<string, any>;
+  private commandManager: CommandManager;
 
   constructor() {
     this.client = new Client({
@@ -109,6 +111,7 @@ class MarmotteMiningBot {
 
     this.commands = new Collection();
     this.services = new Map();
+    this.commandManager = new CommandManager(this.client, this.services);
   }
 
   async initialize(): Promise<void> {
@@ -118,7 +121,10 @@ class MarmotteMiningBot {
       // Initialize core services
       await this.initializeServices();
 
-      // Setup basic event handlers
+      // Load and deploy commands
+      await this.initializeCommands();
+
+      // Setup event handlers
       this.setupEventHandlers();
 
       // Login to Discord
@@ -146,7 +152,6 @@ class MarmotteMiningBot {
       const { RedisService } = await import('./services/cache/RedisService');
       redisService = new RedisService();
       
-      // Set a shorter timeout for the connection attempt
       const connectPromise = redisService.connect();
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error('Redis connection timeout')), 10000)
@@ -179,25 +184,37 @@ class MarmotteMiningBot {
     logger.info('✅ All services initialized successfully');
   }
 
+  private async initializeCommands(): Promise<void> {
+    try {
+      await this.commandManager.loadCommands();
+      await this.commandManager.deployCommands();
+      this.commandManager.setupCommandHandler();
+      
+      logger.info('✅ Commands system initialized');
+    } catch (error) {
+      logger.error('❌ Failed to initialize commands:', error);
+      throw error;
+    }
+  }
+
   private setupEventHandlers(): void {
     this.client.once('ready', () => {
       logger.info(`✅ Bot logged in as ${this.client.user?.tag}!`);
       logger.info(`🎮 Bot is ready and serving ${this.client.guilds.cache.size} servers`);
-      logger.info('💡 Send messages in Discord to earn dollars automatically!');
+      logger.info('💡 Send messages to earn dollars automatically!');
+      logger.info('🎯 Try these commands: /profile, /balance, /help');
     });
 
     this.client.on('messageCreate', async (message) => {
       if (message.author.bot) return;
       
       try {
-        // Reward user for activity
         const activityService = this.getService<ActivityService>('activity');
         const reward = await activityService.rewardMessage(message.author.id, message.content);
         
         if (reward && reward.amount > 0) {
           logger.info(`💰 ${message.author.tag} earned ${reward.amount.toFixed(2)}$ for message activity`);
           
-          // Optional: React to show the reward
           try {
             await message.react('💰');
           } catch (e) {
@@ -224,29 +241,6 @@ class MarmotteMiningBot {
       }
     });
 
-    this.client.on('interactionCreate', async (interaction) => {
-      if (!interaction.isChatInputCommand()) return;
-
-      logger.info(`🎮 Command received: ${interaction.commandName} from ${interaction.user.tag}`);
-      
-      try {
-        // Get user's current balance
-        const activityService = this.getService<ActivityService>('activity');
-        const balance = await activityService.getUserDollarBalance(interaction.user.id);
-        
-        await interaction.reply({
-          content: `🚧 **Commands coming soon!**\n💰 Your current balance: **${balance.toFixed(2)}$**\n\n📝 For now, earn dollars by:\n• Sending messages (+1$)\n• Adding reactions (+0.5$)\n• Being active in voice channels\n\n🔜 Soon you'll be able to:\n• Buy tokens with your dollars\n• Purchase mining machines\n• Join battle royales`,
-          ephemeral: true
-        });
-      } catch (error) {
-        logger.error('Error handling interaction:', error);
-        await interaction.reply({
-          content: '❌ An error occurred while processing your command.',
-          ephemeral: true
-        });
-      }
-    });
-
     this.client.on('error', (error) => {
       logger.error('Discord client error:', error);
     });
@@ -268,21 +262,17 @@ class MarmotteMiningBot {
     logger.info('🛑 Shutting down bot...');
 
     try {
-      // Close database connection
       const database = this.services.get('database');
       if (database) {
         await database.disconnect();
       }
 
-      // Close Redis connection
       const redis = this.services.get('redis');
       if (redis && redis.disconnect) {
         await redis.disconnect();
       }
 
-      // Destroy Discord client
       this.client.destroy();
-
       logger.info('✅ Bot shutdown complete');
     } catch (error) {
       logger.error('Error during shutdown:', error);
