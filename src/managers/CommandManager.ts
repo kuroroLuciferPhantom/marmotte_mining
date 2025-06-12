@@ -1,6 +1,6 @@
 import { Client, Collection, REST, Routes } from 'discord.js';
-import { config } from '../../config/config';
-import { logger } from '../../utils/logger';
+import { config } from '../config/config';
+import { logger } from '../utils/logger';
 import fs from 'fs';
 import path from 'path';
 
