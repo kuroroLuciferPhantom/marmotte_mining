@@ -175,6 +175,8 @@ enum TransactionType {
   EVENT_REWARD
   MAINTENANCE_COST
   UPGRADE_COST
+  TOKEN_PURCHASE
+  DOLLAR_EXCHANGE
 }
 
 enum ActivityType {
