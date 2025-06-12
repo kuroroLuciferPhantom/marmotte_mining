@@ -9,6 +9,14 @@ export class RedisService {
   constructor() {
     this.client = createClient({
       url: config.redis.url,
+      socket: {
+        reconnectStrategy: (retries) => {
+          logger.info(`Redis reconnecting... attempt ${retries}`);
+          return Math.min(retries * 50, 500);
+        },
+        connectTimeout: 10000,
+        lazyConnect: true
+      }
     });
 
     this.setupEventListeners();
@@ -21,7 +29,7 @@ export class RedisService {
     });
 
     this.client.on('error', (error) => {
-      logger.error('❌ Redis error:', error);
+      logger.error('❌ Redis error:', error.message);
       this.isConnected = false;
     });
 
@@ -32,6 +40,11 @@ export class RedisService {
 
     this.client.on('reconnecting', () => {
       logger.info('🔄 Redis reconnecting...');
+    });
+
+    this.client.on('ready', () => {
+      logger.info('🚀 Redis ready');
+      this.isConnected = true;
     });
   }
 
@@ -59,18 +72,20 @@ export class RedisService {
     return this.isConnected;
   }
 
-  // Generic Redis operations
+  // Generic Redis operations with error handling
   async get(key: string): Promise<string | null> {
     try {
+      if (!this.isConnected) return null;
       return await this.client.get(key);
     } catch (error) {
       logger.error(`Failed to get key ${key}:`, error);
-      throw error;
+      return null;
     }
   }
 
   async set(key: string, value: string, ttl?: number): Promise<void> {
     try {
+      if (!this.isConnected) return;
       if (ttl) {
         await this.client.setEx(key, ttl, value);
       } else {
@@ -78,72 +93,66 @@ export class RedisService {
       }
     } catch (error) {
       logger.error(`Failed to set key ${key}:`, error);
-      throw error;
     }
   }
 
   async del(key: string): Promise<number> {
     try {
+      if (!this.isConnected) return 0;
       return await this.client.del(key);
     } catch (error) {
       logger.error(`Failed to delete key ${key}:`, error);
-      throw error;
+      return 0;
     }
   }
 
-  async exists(key: string): Promise<number> {
-    try {
-      return await this.client.exists(key);
-    } catch (error) {
-      logger.error(`Failed to check existence of key ${key}:`, error);
-      throw error;
-    }
-  }
-
-  // Hash operations
   async hGet(key: string, field: string): Promise<string | undefined> {
     try {
+      if (!this.isConnected) return undefined;
       return await this.client.hGet(key, field);
     } catch (error) {
       logger.error(`Failed to get hash field ${field} from ${key}:`, error);
-      throw error;
+      return undefined;
     }
   }
 
   async hSet(key: string, field: string, value: string): Promise<number> {
     try {
+      if (!this.isConnected) return 0;
       return await this.client.hSet(key, field, value);
     } catch (error) {
       logger.error(`Failed to set hash field ${field} in ${key}:`, error);
-      throw error;
+      return 0;
     }
   }
 
   async hGetAll(key: string): Promise<Record<string, string>> {
     try {
+      if (!this.isConnected) return {};
       return await this.client.hGetAll(key);
     } catch (error) {
       logger.error(`Failed to get all hash fields from ${key}:`, error);
-      throw error;
+      return {};
     }
   }
 
-  // Sorted set operations
   async zAdd(key: string, score: number, member: string): Promise<number> {
     try {
+      if (!this.isConnected) return 0;
       return await this.client.zAdd(key, { score, value: member });
     } catch (error) {
       logger.error(`Failed to add member to sorted set ${key}:`, error);
-      throw error;
+      return 0;
     }
   }
 
   async zRevRange(key: string, start: number, stop: number): Promise<string[]> {
     try {
+      if (!this.isConnected) return [];
       return await this.client.zRevRange(key, start, stop);
     } catch (error) {
       logger.error(`Failed to get reverse range from sorted set ${key}:`, error);
-      throw error;
+      return [];
     }
   }
 
