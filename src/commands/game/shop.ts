@@ -324,7 +324,7 @@ function setupMainCollector(response: any, interaction: ChatInputCommandInteract
     time: 300000 // 5 minutes
   });
 
-  collector.on('collect', async (componentInteraction) => {
+  collector.on('collect', async (componentInteraction: StringSelectMenuInteraction | ButtonInteraction) => {
     if (componentInteraction.user.id !== interaction.user.id) {
       await componentInteraction.reply({
         content: '❌ Vous ne pouvez pas utiliser cette boutique!',
@@ -334,13 +334,30 @@ function setupMainCollector(response: any, interaction: ChatInputCommandInteract
     }
 
     // Récupère les données utilisateur actualisées
-    const currentUser = await services.get('database').client.user.findUnique({
+    interface UserWithMachines {
+      id: string;
+      discordId: string;
+      tokens: number;
+      energy: number;
+      machines: any[];
+      // Ajoutez d'autres propriétés utilisateur si nécessaire
+    }
+
+    const currentUser: UserWithMachines | null = await services.get('database').client.user.findUnique({
       where: { discordId: interaction.user.id },
       include: { machines: true }
     });
 
+    if (!currentUser) {
+      await componentInteraction.reply({
+        content: '❌ Utilisateur introuvable.',
+        ephemeral: true
+      });
+      return;
+    }
+
     if (componentInteraction.isStringSelectMenu()) {
-      const selectInteraction = componentInteraction as StringSelectMenuInteraction;
+      const selectInteraction: StringSelectMenuInteraction = componentInteraction as StringSelectMenuInteraction;
       
       if (selectInteraction.customId === 'shop_category_select') {
         const category = selectInteraction.values[0] as ShopCategory;
@@ -349,7 +366,7 @@ function setupMainCollector(response: any, interaction: ChatInputCommandInteract
         await handleProductSelection(selectInteraction, currentUser, services);
       }
     } else if (componentInteraction.isButton()) {
-      const buttonInteraction = componentInteraction as ButtonInteraction;
+      const buttonInteraction: ButtonInteraction = componentInteraction as ButtonInteraction;
       await handleButtonClick(buttonInteraction, currentUser, services);
     }
   });
