@@ -9,12 +9,22 @@ import {
   ButtonBuilder,
   ButtonStyle
 } from 'discord.js';
-import { MachineType } from '@prisma/client';
+import { MachineType, AttackType, DefenseType, CardRarity, FragmentType } from '@prisma/client';
 import { MiningService } from '../../services/mining/MiningService';
 
 export const data = new SlashCommandBuilder()
   .setName('shop')
-  .setDescription('🛒 Boutique de machines de minage - Achetez vos équipements!');
+  .setDescription('🛒 Boutique générale - Machines, cartes, objets et plus encore!');
+
+// Types de boutique
+enum ShopCategory {
+  MAIN = 'main',
+  MINING = 'mining',
+  ATTACK_CARDS = 'attack_cards',
+  DEFENSE_CARDS = 'defense_cards',
+  FRAGMENTS = 'fragments',
+  CONSUMABLES = 'consumables'
+}
 
 // Configuration des machines avec emojis et descriptions
 const machineInfo = {
@@ -50,6 +60,130 @@ const machineInfo = {
   }
 };
 
+// Configuration des cartes d'attaque
+const attackCardInfo = {
+  VIRUS_Z3_MINER: {
+    name: '🦠 Virus Z3-Miner',
+    emoji: '🦠',
+    description: 'Infecte les machines adverses (-50% hashrate, 2h)',
+    price: 25
+  },
+  BLACKOUT_TARGETED: {
+    name: '⚡ Blackout Ciblé',
+    emoji: '⚡',
+    description: 'Coupe l\'électricité (pause minage, 20min)',
+    price: 15
+  },
+  FORCED_RECALIBRATION: {
+    name: '🔧 Recalibrage Forcé',
+    emoji: '🔧',
+    description: 'Force une recalibration (-25% efficacité, 1h)',
+    price: 20
+  },
+  DNS_HIJACKING: {
+    name: '🌐 Détournement DNS',
+    emoji: '🌐',
+    description: 'Vole 10% du hashrate ennemi (3h)',
+    price: 45
+  },
+  BRUTAL_THEFT: {
+    name: '💀 Vol Brutal',
+    emoji: '💀',
+    description: 'Vol direct de tokens sans détection',
+    price: 75
+  }
+};
+
+// Configuration des cartes de défense
+const defenseCardInfo = {
+  ANTIVIRUS: {
+    name: '🛡️ Antivirus',
+    emoji: '🛡️',
+    description: 'Annule les attaques de virus',
+    price: 20
+  },
+  BACKUP_GENERATOR: {
+    name: '🔋 Générateur de Secours',
+    emoji: '🔋',
+    description: 'Résiste aux coupures électriques',
+    price: 30
+  },
+  OPTIMIZATION_SOFTWARE: {
+    name: '⚙️ Logiciel d\'Optimisation',
+    emoji: '⚙️',
+    description: 'Réduit la durée des malus de 50%',
+    price: 35
+  },
+  VPN_FIREWALL: {
+    name: '🔒 VPN + Firewall',
+    emoji: '🔒',
+    description: '50% de chance d\'éviter les attaques réseau',
+    price: 50
+  },
+  SABOTAGE_DETECTOR: {
+    name: '📡 Détecteur de Sabotage',
+    emoji: '📡',
+    description: 'Identifie l\'attaquant et alerte',
+    price: 60
+  }
+};
+
+// Configuration des fragments
+const fragmentInfo = {
+  ATTACK_FRAGMENT: {
+    name: '🔴 Fragment d\'Attaque',
+    emoji: '🔴',
+    description: 'Utilisé pour crafter des cartes d\'attaque',
+    price: 5
+  },
+  DEFENSE_FRAGMENT: {
+    name: '🔵 Fragment de Défense',
+    emoji: '🔵',
+    description: 'Utilisé pour crafter des cartes de défense',
+    price: 5
+  },
+  RARE_FRAGMENT: {
+    name: '🟡 Fragment Rare',
+    emoji: '🟡',
+    description: 'Fragment spécial pour objets rares',
+    price: 15
+  }
+};
+
+// Configuration des consommables
+const consumableInfo = {
+  ENERGY_DRINK: {
+    name: '⚡ Boisson Énergétique',
+    emoji: '⚡',
+    description: 'Restaure 25 points d\'énergie',
+    price: 10
+  },
+  MEGA_ENERGY: {
+    name: '🔥 Méga Énergie',
+    emoji: '🔥',
+    description: 'Restaure 50 points d\'énergie',
+    price: 18
+  },
+  LUCK_POTION: {
+    name: '🍀 Potion de Chance',
+    emoji: '🍀',
+    description: '+20% de chance de succès missions (1h)',
+    price: 30
+  },
+  MINING_BOOST: {
+    name: '⛏️ Boost de Minage',
+    emoji: '⛏️',
+    description: '+50% de gains de minage (2h)',
+    price: 40
+  },
+  PROTECTION_SHIELD: {
+    name: '🛡️ Bouclier de Protection',
+    emoji: '🛡️',
+    description: 'Immunité totale aux attaques (30min)',
+    price: 25
+  }
+};
+
 export async function execute(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   try {
     const miningService = services.get('mining') as MiningService;
@@ -69,231 +203,8 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       return;
     }
 
-    // Obtient les configurations des machines
-    const machineConfigs = miningService.getMachineConfigs();
-
-    // Crée l'embed principal de la boutique
-    const shopEmbed = new EmbedBuilder()
-      .setColor(0x3498DB)
-      .setTitle('🛒 **BOUTIQUE DE MINAGE** 🛒')
-      .setDescription(`**💰 Votre budget**: ${user.tokens.toFixed(2)} tokens\n**⛏️ Machines possédées**: ${user.machines.length}\n\n*Sélectionnez une machine ci-dessous pour l'acheter*`)
-      .addFields(
-        {
-          name: '📊 **CATALOGUE DES MACHINES**',
-          value: Object.entries(machineConfigs).map(([type, config]) => {
-            const info = machineInfo[type as MachineType];
-            const affordable = user.tokens >= config.cost ? '✅' : '❌';
-            return `${affordable} ${info.emoji} **${info.name}**\n💰 ${config.cost} tokens | ⚡ ${config.baseHashRate}/s | 🔋 ${config.powerConsumption}W`;
-          }).join('\n\n'),
-          inline: false
-        }
-      )
-      .setFooter({ text: '💡 Plus le prix est élevé, plus les gains sont importants!' })
-      .setTimestamp();
-
-    // Crée le menu déroulant pour sélectionner une machine
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId('shop_select_machine')
-      .setPlaceholder('🛒 Choisissez une machine à acheter...')
-      .addOptions(
-        Object.entries(machineConfigs).map(([type, config]) => {
-          const info = machineInfo[type as MachineType];
-          const affordable = user.tokens >= config.cost;
-          
-          return {
-            label: `${info.name} - ${config.cost} tokens`,
-            description: `${info.description} | ⚡${config.baseHashRate}/s | 🔋${config.powerConsumption}W`,
-            value: type,
-            emoji: info.emoji,
-            default: false
-          };
-        })
-      );
-
-    // Bouton de rafraîchissement
-    const refreshButton = new ButtonBuilder()
-      .setCustomId('shop_refresh')
-      .setLabel('🔄 Actualiser')
-      .setStyle(ButtonStyle.Secondary);
-
-    const actionRow1 = new ActionRowBuilder<StringSelectMenuBuilder>()
-      .addComponents(selectMenu);
-    
-    const actionRow2 = new ActionRowBuilder<ButtonBuilder>()
-      .addComponents(refreshButton);
-
-    const response = await interaction.reply({
-      embeds: [shopEmbed],
-      components: [actionRow1, actionRow2],
-      fetchReply: true
-    });
-
-    // Collecteur pour les interactions du menu
-    const collector = response.createMessageComponentCollector({
-      componentType: ComponentType.StringSelect,
-      time: 300000 // 5 minutes
-    });
-
-    const buttonCollector = response.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: 300000
-    });
-
-    // Gestion de la sélection de machine
-    collector.on('collect', async (selectInteraction: StringSelectMenuInteraction) => {
-      if (selectInteraction.user.id !== interaction.user.id) {
-        await selectInteraction.reply({
-          content: '❌ Vous ne pouvez pas utiliser cette boutique!',
-          ephemeral: true
-        });
-        return;
-      }
-
-      const selectedMachine = selectInteraction.values[0] as MachineType;
-      const config = machineConfigs[selectedMachine];
-      const info = machineInfo[selectedMachine];
-
-      // Vérifier si l'utilisateur a assez de tokens
-      const currentUser = await databaseService.client.user.findUnique({
-        where: { discordId: interaction.user.id }
-      });
-
-      if (!currentUser || currentUser.tokens < config.cost) {
-        await selectInteraction.reply({
-          content: `❌ Fonds insuffisants! Vous avez besoin de **${config.cost} tokens** mais vous n'avez que **${currentUser?.tokens.toFixed(2) || 0} tokens**.`,
-          ephemeral: true
-        });
-        return;
-      }
-
-      // Crée l'embed de confirmation
-      const confirmEmbed = new EmbedBuilder()
-        .setColor(0xE67E22)
-        .setTitle(`${info.emoji} Confirmer l'achat`)
-        .setDescription(`**Machine**: ${info.name}\n**Prix**: ${config.cost} tokens\n**Description**: ${info.details}`)
-        .addFields(
-          { name: '⚡ Hash Rate', value: `${config.baseHashRate}/s`, inline: true },
-          { name: '🔋 Consommation', value: `${config.powerConsumption}W`, inline: true },
-          { name: '🔧 Maintenance', value: `${config.maintenanceCost} tokens`, inline: true },
-          { name: '💰 Solde actuel', value: `${currentUser.tokens.toFixed(2)} tokens`, inline: true },
-          { name: '💰 Solde après achat', value: `${(currentUser.tokens - config.cost).toFixed(2)} tokens`, inline: true },
-          { name: '📈 Estimation gains', value: `~${(config.baseHashRate * 3600).toFixed(2)} tokens/h`, inline: true }
-        )
-        .setFooter({ text: 'Confirmez-vous cet achat?' });
-
-      // Boutons de confirmation
-      const confirmButton = new ButtonBuilder()
-        .setCustomId(`confirm_purchase_${selectedMachine}`)
-        .setLabel('✅ Confirmer l\'achat')
-        .setStyle(ButtonStyle.Success);
-
-      const cancelButton = new ButtonBuilder()
-        .setCustomId('cancel_purchase')
-        .setLabel('❌ Annuler')
-        .setStyle(ButtonStyle.Danger);
-
-      const confirmRow = new ActionRowBuilder<ButtonBuilder>()
-        .addComponents(confirmButton, cancelButton);
-
-      await selectInteraction.update({
-        embeds: [confirmEmbed],
-        components: [confirmRow]
-      });
-    });
-
-    // Gestion du bouton de rafraîchissement
-    buttonCollector.on('collect', async (buttonInteraction) => {
-      if (buttonInteraction.user.id !== interaction.user.id) {
-        await buttonInteraction.reply({
-          content: '❌ Vous ne pouvez pas utiliser cette boutique!',
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (buttonInteraction.customId === 'shop_refresh') {
-        // Recharge les données utilisateur
-        const refreshedUser = await databaseService.client.user.findUnique({
-          where: { discordId: interaction.user.id },
-          include: { machines: true }
-        });
-
-        if (refreshedUser) {
-          const refreshedEmbed = new EmbedBuilder()
-            .setColor(0x3498DB)
-            .setTitle('🛒 **BOUTIQUE DE MINAGE** 🛒')
-            .setDescription(`**💰 Votre budget**: ${refreshedUser.tokens.toFixed(2)} tokens\n**⛏️ Machines possédées**: ${refreshedUser.machines.length}\n\n*Sélectionnez une machine ci-dessous pour l'acheter*`)
-            .addFields(
-              {
-                name: '📊 **CATALOGUE DES MACHINES**',
-                value: Object.entries(machineConfigs).map(([type, config]) => {
-                  const info = machineInfo[type as MachineType];
-                  const affordable = refreshedUser.tokens >= config.cost ? '✅' : '❌';
-                  return `${affordable} ${info.emoji} **${info.name}**\n💰 ${config.cost} tokens | ⚡ ${config.baseHashRate}/s | 🔋 ${config.powerConsumption}W`;
-                }).join('\n\n'),
-                inline: false
-              }
-            )
-            .setFooter({ text: '💡 Plus le prix est élevé, plus les gains sont importants!' })
-            .setTimestamp();
-
-          await buttonInteraction.update({
-            embeds: [refreshedEmbed],
-            components: [actionRow1, actionRow2]
-          });
-        }
-      } else if (buttonInteraction.customId.startsWith('confirm_purchase_')) {
-        // Traite l'achat confirmé
-        const machineType = buttonInteraction.customId.replace('confirm_purchase_', '') as MachineType;
-        const purchaseResult = await miningService.purchaseMachine(currentUser.id, machineType);
-
-        if (purchaseResult.success) {
-          const successEmbed = new EmbedBuilder()
-            .setColor(0x27AE60)
-            .setTitle('🎉 Achat réussi!')
-            .setDescription(purchaseResult.message)
-            .addFields(
-              { name: '🆕 Machine ajoutée', value: `${machineInfo[machineType].emoji} ${machineInfo[machineType].name}`, inline: true },
-              { name: '💡 Conseil', value: 'Utilisez `/inventory` pour voir vos machines\nUtilisez `/mine start` pour commencer à miner!', inline: false }
-            )
-            .setFooter({ text: 'Bon minage! ⛏️' });
-
-          await buttonInteraction.update({
-            embeds: [successEmbed],
-            components: []
-          });
-        } else {
-          await buttonInteraction.update({
-            content: `❌ ${purchaseResult.message}`,
-            embeds: [],
-            components: []
-          });
-        }
-      } else if (buttonInteraction.customId === 'cancel_purchase') {
-        // Retour à la boutique
-        await buttonInteraction.update({
-          embeds: [shopEmbed],
-          components: [actionRow1, actionRow2]
-        });
-      }
-    });
-
-    // Nettoyage après expiration
-    collector.on('end', async () => {
-      try {
-        const disabledRow1 = new ActionRowBuilder<StringSelectMenuBuilder>()
-          .addComponents(selectMenu.setDisabled(true));
-        
-        const disabledRow2 = new ActionRowBuilder<ButtonBuilder>()
-          .addComponents(refreshButton.setDisabled(true));
-
-        await interaction.editReply({
-          components: [disabledRow1, disabledRow2]
-        });
-      } catch (error) {
-        // Ignore les erreurs de modification après expiration
-      }
-    });
+    // Affiche l'interface principale de la boutique
+    await showMainShop(interaction, user);
 
   } catch (error) {
     console.error('Error in shop command:', error);
@@ -309,4 +220,226 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       await interaction.reply(errorMessage);
     }
   }
+}
+
+async function showMainShop(interaction: ChatInputCommandInteraction, user: any) {
+  const mainEmbed = new EmbedBuilder()
+    .setColor(0x3498DB)
+    .setTitle('🛒 **BOUTIQUE GÉNÉRALE** 🛒')
+    .setDescription(`**💰 Votre budget**: ${user.tokens.toFixed(2)} tokens\n**⚡ Votre énergie**: ${user.energy}/100\n\n*Choisissez une catégorie pour explorer nos produits*`)
+    .addFields(
+      {
+        name: '🏗️ **ÉQUIPEMENTS DE MINAGE**',
+        value: `⛏️ Machines de minage (5 modèles)\n💎 Du BASIC RIG au MEGA FARM\n💰 De 100 à 50,000 tokens`,
+        inline: true
+      },
+      {
+        name: '⚔️ **CARTES D\'ATTAQUE**',
+        value: `🦠 Virus et sabotages\n⚡ Attaques électriques\n💀 Vols et piratage`,
+        inline: true
+      },
+      {
+        name: '🛡️ **CARTES DE DÉFENSE**',
+        value: `🔒 Protection réseau\n🔋 Générateurs de secours\n📡 Détection d\'intrusion`,
+        inline: true
+      },
+      {
+        name: '🧩 **FRAGMENTS**',
+        value: `🔴 Fragments d\'attaque\n🔵 Fragments de défense\n🟡 Fragments rares`,
+        inline: true
+      },
+      {
+        name: '🧪 **CONSOMMABLES**',
+        value: `⚡ Boissons énergétiques\n🍀 Potions de chance\n⛏️ Boosts temporaires`,
+        inline: true
+      },
+      {
+        name: '💡 **NOUVEAUTÉS**',
+        value: `🆕 Produits récemment ajoutés\n🔥 Offres spéciales\n⭐ Articles populaires`,
+        inline: true
+      }
+    )
+    .setFooter({ text: 'Utilisez le menu ci-dessous pour naviguer' })
+    .setTimestamp();
+
+  // Menu principal de catégories
+  const categoryMenu = new StringSelectMenuBuilder()
+    .setCustomId('shop_category_select')
+    .setPlaceholder('🏪 Choisissez une catégorie...')
+    .addOptions([
+      {
+        label: '⛏️ Équipements de Minage',
+        description: 'Machines pour augmenter vos gains',
+        value: ShopCategory.MINING,
+        emoji: '⛏️'
+      },
+      {
+        label: '⚔️ Cartes d\'Attaque',
+        description: 'Sabotez vos concurrents',
+        value: ShopCategory.ATTACK_CARDS,
+        emoji: '⚔️'
+      },
+      {
+        label: '🛡️ Cartes de Défense',
+        description: 'Protégez-vous des attaques',
+        value: ShopCategory.DEFENSE_CARDS,
+        emoji: '🛡️'
+      },
+      {
+        label: '🧩 Fragments',
+        description: 'Matériaux pour le craft',
+        value: ShopCategory.FRAGMENTS,
+        emoji: '🧩'
+      },
+      {
+        label: '🧪 Consommables',
+        description: 'Objets à usage unique',
+        value: ShopCategory.CONSUMABLES,
+        emoji: '🧪'
+      }
+    ]);
+
+  const actionRow = new ActionRowBuilder<StringSelectMenuBuilder>()
+    .addComponents(categoryMenu);
+
+  const response = await interaction.reply({
+    embeds: [mainEmbed],
+    components: [actionRow],
+    fetchReply: true
+  });
+
+  // Collecteur pour les interactions du menu
+  const collector = response.createMessageComponentCollector({
+    componentType: ComponentType.StringSelect,
+    time: 300000 // 5 minutes
+  });
+
+  collector.on('collect', async (selectInteraction: StringSelectMenuInteraction) => {
+    if (selectInteraction.user.id !== interaction.user.id) {
+      await selectInteraction.reply({
+        content: '❌ Vous ne pouvez pas utiliser cette boutique!',
+        ephemeral: true
+      });
+      return;
+    }
+
+    const category = selectInteraction.values[0] as ShopCategory;
+    
+    // Récupère les données utilisateur actualisées
+    const currentUser = await selectInteraction.client.services?.get('database')?.client.user.findUnique({
+      where: { discordId: interaction.user.id },
+      include: { machines: true }
+    }) || user;
+
+    switch (category) {
+      case ShopCategory.MINING:
+        await showMiningCategory(selectInteraction, currentUser, services);
+        break;
+      case ShopCategory.ATTACK_CARDS:
+        await showAttackCardsCategory(selectInteraction, currentUser);
+        break;
+      case ShopCategory.DEFENSE_CARDS:
+        await showDefenseCardsCategory(selectInteraction, currentUser);
+        break;
+      case ShopCategory.FRAGMENTS:
+        await showFragmentsCategory(selectInteraction, currentUser);
+        break;
+      case ShopCategory.CONSUMABLES:
+        await showConsumablesCategory(selectInteraction, currentUser);
+        break;
+    }
+  });
+
+  // Nettoyage après expiration
+  collector.on('end', async () => {
+    try {
+      const disabledRow = new ActionRowBuilder<StringSelectMenuBuilder>()
+        .addComponents(categoryMenu.setDisabled(true));
+
+      await interaction.editReply({
+        components: [disabledRow]
+      });
+    } catch (error) {
+      // Ignore les erreurs de modification après expiration
+    }
+  });
+}
+
+async function showMiningCategory(interaction: StringSelectMenuInteraction, user: any, services: Map<string, any>) {
+  const miningService = services.get('mining') as MiningService;
+  const machineConfigs = miningService.getMachineConfigs();
+
+  const miningEmbed = new EmbedBuilder()
+    .setColor(0xE67E22)
+    .setTitle('⛏️ **ÉQUIPEMENTS DE MINAGE** ⛏️')
+    .setDescription(`**💰 Budget**: ${user.tokens.toFixed(2)} tokens | **🏭 Machines**: ${user.machines.length}\n\n*Investissez dans des machines pour augmenter vos gains!*`)
+    .addFields(
+      {
+        name: '📊 **CATALOGUE DES MACHINES**',
+        value: Object.entries(machineConfigs).map(([type, config]) => {
+          const info = machineInfo[type as MachineType];
+          const affordable = user.tokens >= config.cost ? '✅' : '❌';
+          return `${affordable} ${info.emoji} **${info.name}**\n💰 ${config.cost} tokens | ⚡ ${config.baseHashRate}/s | 🔋 ${config.powerConsumption}W`;
+        }).join('\n\n'),
+        inline: false
+      }
+    )
+    .setFooter({ text: '💡 Plus le prix est élevé, plus les gains sont importants!' });
+
+  // Menu pour sélectionner une machine
+  const machineMenu = new StringSelectMenuBuilder()
+    .setCustomId('shop_machine_select')
+    .setPlaceholder('🛒 Choisissez une machine à acheter...')
+    .addOptions(
+      Object.entries(machineConfigs).map(([type, config]) => {
+        const info = machineInfo[type as MachineType];
+        
+        return {
+          label: `${info.name} - ${config.cost} tokens`,
+          description: `${info.description} | ⚡${config.baseHashRate}/s`,
+          value: type,
+          emoji: info.emoji
+        };
+      })
+    );
+
+  // Bouton retour
+  const backButton = new ButtonBuilder()
+    .setCustomId('shop_back_main')
+    .setLabel('🔙 Retour')
+    .setStyle(ButtonStyle.Secondary);
+
+  const machineRow = new ActionRowBuilder<StringSelectMenuBuilder>()
+    .addComponents(machineMenu);
+  
+  const buttonRow = new ActionRowBuilder<ButtonBuilder>()
+    .addComponents(backButton);
+
+  await interaction.update({
+    embeds: [miningEmbed],
+    components: [machineRow, buttonRow]
+  });
+
+  // Collecteur pour cette catégorie
+  setupCategoryCollector(interaction, user, services, 'mining');
+}
+
+async function showAttackCardsCategory(interaction: StringSelectMenuInteraction, user: any) {
+  const attackEmbed = new EmbedBuilder()
+    .setColor(0xE74C3C)
+    .setTitle('⚔️ **CARTES D\'ATTAQUE** ⚔️')
+    .setDescription(`**💰 Budget**: ${user.tokens.toFixed(2)} tokens\n\n*Sabotez vos concurrents avec ces cartes redoutables!*`)
+    .addFields(
+      {
+        name: '🦠 **ATTAQUES DISPONIBLES**',
+        value: Object.entries(attackCardInfo).map(([type, info]) => {
+          const affordable = user.tokens >= info.price ? '✅' : '❌';
+          return `${affordable} ${info.emoji} **${info.name}**\n💰 ${info.price} tokens\n📝 ${info.description}`;
+        }).join('\n\n'),
+        inline: false
+      }
+    )
+    .setFooter({ text: '⚠️ Utilisez ces cartes avec parcimonie!' });
+
+  await showCategoryWithBack(interaction, attackEmbed, 'attack');
 }
