@@ -214,7 +214,7 @@ async function handleRegistration(buttonInteraction: any, services: Map<string, 
       await tx.transaction.create({
         data: {
           userId: user.id,
-          type: TransactionType.REGISTRATION_BONUS,
+          type: TransactionType.EVENT_REWARD,
           amount: 0,
           description: "Machine de départ gratuite: BASIC RIG"
         }
@@ -280,7 +280,14 @@ async function handleRegistration(buttonInteraction: any, services: Map<string, 
       time: 300000 // 5 minutes
     });
 
-    quickCollector.on('collect', async (quickInteraction) => {
+    interface QuickInteraction extends ChatInputCommandInteraction {
+      customId: string;
+      message: {
+        createMessageComponentCollector: typeof buttonInteraction.message.createMessageComponentCollector;
+      };
+    }
+
+    quickCollector.on('collect', async (quickInteraction: QuickInteraction) => {
       if (quickInteraction.user.id !== buttonInteraction.user.id) {
         await quickInteraction.reply({
           content: '❌ Ces boutons ne sont pas pour vous!',
