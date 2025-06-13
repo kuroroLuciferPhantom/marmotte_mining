@@ -14,11 +14,12 @@ model User {
   id        String   @id @default(cuid())
   discordId String   @unique
   username  String
-  tokens    Float    @default(100.0)
+  tokens    Float    @default(0.0) // Commence avec 0 tokens
   dollars   Float    @default(0.0)
   energy    Int      @default(100) // Énergie pour actions spéciales
   experience Int     @default(0)
   level     Int      @default(1)
+  location  String   @default("Chambre chez maman") // Lieu du joueur
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -61,7 +62,7 @@ model Machine {
   userId      String
   type        MachineType
   level       Int         @default(1)
-  efficiency  Float       @default(1.0)
+  efficiency  Float       @default(100.0)
   durability  Float       @default(100.0)
   purchasedAt DateTime    @default(now())
   lastMaintenance DateTime @default(now())
@@ -334,6 +335,7 @@ enum TransactionType {
   MISSION_REWARD
   BLACK_MARKET_PURCHASE
   CARD_CRAFT
+  REGISTRATION_BONUS
 }
 
 enum ActivityType {
