@@ -5,6 +5,9 @@ import { DatabaseService } from './services/database/DatabaseService';
 import { MiningService } from './services/mining/MiningService';
 import { BattleService } from './services/battle/BattleService';
 import { ActivityService } from './services/activity/ActivityService';
+import { SabotageService } from './services/sabotage/SabotageService';
+import { CardService } from './services/sabotage/CardService';
+import { BlackMarketService } from './services/sabotage/BlackMarketService';
 import { CommandManager } from './managers/CommandManager';
 
 // Mock Redis service for fallback
@@ -97,6 +100,9 @@ class MarmotteMiningBot {
   public commands: Collection<string, any>;
   private services: Map<string, any>;
   private commandManager: CommandManager;
+  private cleanupInterval?: NodeJS.Timeout;
+  private marketRefreshInterval?: NodeJS.Timeout;
+  private energyRegenInterval?: NodeJS.Timeout;
 
   constructor() {
     this.client = new Client({
@@ -126,6 +132,9 @@ class MarmotteMiningBot {
 
       // Setup event handlers
       this.setupEventHandlers();
+
+      // Setup periodic tasks
+      this.setupPeriodicTasks();
 
       // Login to Discord
       await this.client.login(config.discord.token);
@@ -171,7 +180,7 @@ class MarmotteMiningBot {
       this.services.set('redis', redisService);
     }
 
-    // Initialize other services
+    // Initialize core services
     const miningService = new MiningService(databaseService, this.services.get('redis'));
     this.services.set('mining', miningService);
 
@@ -180,6 +189,16 @@ class MarmotteMiningBot {
 
     const activityService = new ActivityService(databaseService, this.services.get('redis'));
     this.services.set('activity', activityService);
+
+    // Initialize PvP services
+    const sabotageService = new SabotageService(databaseService.client);
+    this.services.set('sabotage', sabotageService);
+
+    const cardService = new CardService(databaseService.client);
+    this.services.set('cards', cardService);
+
+    const blackMarketService = new BlackMarketService(databaseService.client);
+    this.services.set('blackmarket', blackMarketService);
 
     logger.info('✅ All services initialized successfully');
   }
@@ -203,6 +222,7 @@ class MarmotteMiningBot {
       logger.info(`🎮 Bot is ready and serving ${this.client.guilds.cache.size} servers`);
       logger.info('💡 Send messages to earn dollars automatically!');
       logger.info('🎯 Try these commands: /profile, /balance, /help');
+      logger.info('🔥 New PvP commands: /sabotage, /mission, /craft, /marche_noir');
     });
 
     this.client.on('messageCreate', async (message) => {
@@ -250,6 +270,59 @@ class MarmotteMiningBot {
     });
   }
 
+  private setupPeriodicTasks(): void {
+    // Nettoyage des effets de sabotage expirés (toutes les 5 minutes)
+    this.cleanupInterval = setInterval(async () => {
+      try {
+        const sabotageService = this.getService<SabotageService>('sabotage');
+        await sabotageService.cleanupExpiredEffects();
+      } catch (error) {
+        logger.error('Error in sabotage cleanup:', error);
+      }
+    }, 5 * 60 * 1000);
+
+    // Vérification du refresh du marché noir (toutes les heures)
+    this.marketRefreshInterval = setInterval(async () => {
+      try {
+        const blackMarketService = this.getService<BlackMarketService>('blackmarket');
+        if (await blackMarketService.needsRefresh()) {
+          await blackMarketService.refreshMarket();
+          logger.info('🕴️ Black market refreshed automatically');
+        }
+      } catch (error) {
+        logger.error('Error in market refresh:', error);
+      }
+    }, 60 * 60 * 1000);
+
+    // Régénération d'énergie (toutes les heures)
+    this.energyRegenInterval = setInterval(async () => {
+      try {
+        const cardService = this.getService<CardService>('cards');
+        await cardService.regenerateEnergy();
+        logger.info('⚡ Energy regenerated for all users');
+      } catch (error) {
+        logger.error('Error in energy regeneration:', error);
+      }
+    }, 60 * 60 * 1000);
+
+    // Nettoyage des inventaires vides (une fois par jour)
+    setInterval(async () => {
+      try {
+        const cardService = this.getService<CardService>('cards');
+        await cardService.cleanupInventory();
+        
+        const blackMarketService = this.getService<BlackMarketService>('blackmarket');
+        await blackMarketService.cleanup();
+        
+        logger.info('🧹 Daily cleanup completed');
+      } catch (error) {
+        logger.error('Error in daily cleanup:', error);
+      }
+    }, 24 * 60 * 60 * 1000);
+
+    logger.info('⏰ Periodic tasks scheduled');
+  }
+
   public getService<T>(name: string): T {
     const service = this.services.get(name);
     if (!service) {
@@ -262,6 +335,11 @@ class MarmotteMiningBot {
     logger.info('🛑 Shutting down bot...');
 
     try {
+      // Clear intervals
+      if (this.cleanupInterval) clearInterval(this.cleanupInterval);
+      if (this.marketRefreshInterval) clearInterval(this.marketRefreshInterval);
+      if (this.energyRegenInterval) clearInterval(this.energyRegenInterval);
+
       const database = this.services.get('database');
       if (database) {
         await database.disconnect();

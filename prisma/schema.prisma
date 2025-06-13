@@ -15,6 +15,8 @@ model User {
   discordId String   @unique
   username  String
   tokens    Float    @default(100.0)
+  dollars   Float    @default(0.0)
+  energy    Int      @default(100) // Énergie pour actions spéciales
   experience Int     @default(0)
   level     Int      @default(1)
   createdAt DateTime @default(now())
@@ -26,14 +28,30 @@ model User {
   activityRewards ActivityReward[]
   transactions    Transaction[]
   eventParticipations EventParticipation[]
+  
+  // PvP Relations
+  attackCards     AttackCard[]
+  defenseCards    DefenseCard[]
+  cardFragments   CardFragment[]
+  sabotageActions SabotageAction[] @relation("Attacker")
+  sabotageTargets SabotageAction[] @relation("Target")
+  sabotageDefenses SabotageDefense[]
+  sabotageImmunities SabotageImmunity[]
+  missionAttempts MissionAttempt[]
+  blackMarketPurchases BlackMarketPurchase[]
 
   // Stats
   totalMined      Float @default(0.0)
   battlesWon      Int   @default(0)
   battlesLost     Int   @default(0)
+  sabotagesSuccessful Int @default(0)
+  sabotagesReceived   Int @default(0)
+  sabotagesBlocked    Int @default(0)
   lastActive      DateTime @default(now())
   miningActive    Boolean @default(false)
   lastMiningCheck DateTime @default(now())
+  lastSabotage    DateTime? // Cooldown pour attaques
+  lastMission     DateTime? // Cooldown pour missions
 
   @@map("users")
 }
@@ -47,6 +65,11 @@ model Machine {
   durability  Float       @default(100.0)
   purchasedAt DateTime    @default(now())
   lastMaintenance DateTime @default(now())
+  
+  // Effets de sabotage actifs
+  hashrateDebuff Float @default(0.0) // Malus de hashrate en %
+  efficiencyDebuff Float @default(0.0) // Malus d'efficacité en %
+  sabotageEndTime DateTime? // Fin des effets de sabotage
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -151,6 +174,136 @@ model EventParticipation {
   @@map("event_participations")
 }
 
+// ============ SYSTÈME PvP SABOTAGE ============
+
+model AttackCard {
+  id          String      @id @default(cuid())
+  userId      String
+  type        AttackType
+  rarity      CardRarity  @default(COMMON)
+  quantity    Int         @default(1)
+  acquiredAt  DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("attack_cards")
+}
+
+model DefenseCard {
+  id          String      @id @default(cuid())
+  userId      String
+  type        DefenseType
+  rarity      CardRarity  @default(COMMON)
+  isActive    Boolean     @default(false) // Défenses permanentes activées
+  quantity    Int         @default(1)
+  acquiredAt  DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("defense_cards")
+}
+
+model CardFragment {
+  id          String        @id @default(cuid())
+  userId      String
+  type        FragmentType
+  quantity    Int           @default(1)
+  acquiredAt  DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("card_fragments")
+}
+
+model SabotageAction {
+  id          String      @id @default(cuid())
+  attackerId  String
+  targetId    String
+  type        AttackType
+  success     Boolean
+  damage      Float       @default(0.0) // Dégâts infligés
+  duration    Int         @default(0)   // Durée en minutes
+  cost        Json        // Coût payé (carte, énergie, etc.)
+  timestamp   DateTime    @default(now())
+  endTime     DateTime?   // Fin des effets
+  
+  // Détection et logs
+  detected    Boolean     @default(false)
+  logMessage  String?     // Message RP du sabotage
+
+  attacker User @relation("Attacker", fields: [attackerId], references: [id], onDelete: Cascade)
+  target   User @relation("Target", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@map("sabotage_actions")
+}
+
+model SabotageDefense {
+  id            String      @id @default(cuid())
+  userId        String
+  defenseType   DefenseType
+  sabotageId    String?     // Si défense contre une attaque spécifique
+  success       Boolean
+  timestamp     DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sabotage_defenses")
+}
+
+model SabotageImmunity {
+  id        String   @id @default(cuid())
+  userId    String
+  endTime   DateTime // Fin de l'immunité post-attaque
+  reason    String   // Raison de l'immunité
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sabotage_immunities")
+}
+
+model MissionAttempt {
+  id          String        @id @default(cuid())
+  userId      String
+  missionType MissionType
+  success     Boolean
+  reward      Json?         // Récompense obtenue
+  timestamp   DateTime      @default(now())
+  narrative   String?       // Texte narratif de la mission
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("mission_attempts")
+}
+
+model BlackMarketOffer {
+  id          String      @id @default(cuid())
+  cardType    String      // Type de carte (AttackType ou DefenseType)
+  rarity      CardRarity
+  price       Float       // Prix en tokens $7N1
+  stock       Int         @default(1)
+  refreshedAt DateTime    @default(now())
+  expiresAt   DateTime    // Expiration de l'offre
+
+  purchases BlackMarketPurchase[]
+
+  @@map("black_market_offers")
+}
+
+model BlackMarketPurchase {
+  id        String   @id @default(cuid())
+  userId    String
+  offerId   String
+  price     Float
+  timestamp DateTime @default(now())
+
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  offer BlackMarketOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  @@map("black_market_purchases")
+}
+
+// ============ ENUMS ============
+
 enum MachineType {
   BASIC_RIG
   ADVANCED_RIG
@@ -177,6 +330,10 @@ enum TransactionType {
   UPGRADE_COST
   TOKEN_PURCHASE
   DOLLAR_EXCHANGE
+  SABOTAGE_COST
+  MISSION_REWARD
+  BLACK_MARKET_PURCHASE
+  CARD_CRAFT
 }
 
 enum ActivityType {
@@ -194,4 +351,42 @@ enum EventType {
   MAINTENANCE_FREE
   DOUBLE_REWARDS
   FLASH_SALE
+}
+
+enum AttackType {
+  VIRUS_Z3_MINER      // -50% hashrate, 2h
+  BLACKOUT_TARGETED   // Pause mining, 20min
+  FORCED_RECALIBRATION // -25% efficacité, 1h
+  DNS_HIJACKING       // 10% hashrate volé, 3h
+  BRUTAL_THEFT        // Vol direct de tokens
+}
+
+enum DefenseType {
+  ANTIVIRUS           // Annule virus
+  BACKUP_GENERATOR    // Annule blackout
+  OPTIMIZATION_SOFTWARE // Réduit durée malus 50%
+  VPN_FIREWALL        // 50% éviter attaque réseau
+  SABOTAGE_DETECTOR   // Identifie attaquant
+}
+
+enum CardRarity {
+  COMMON
+  UNCOMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+enum FragmentType {
+  ATTACK_FRAGMENT
+  DEFENSE_FRAGMENT
+  RARE_FRAGMENT
+}
+
+enum MissionType {
+  INFILTRATE_FARM     // Infiltrer une ferme de mining
+  HACK_WAREHOUSE      // Pirater un entrepôt
+  STEAL_BLUEPRINT     // Voler des plans
+  SABOTAGE_COMPETITOR // Saboter un concurrent
+  RESCUE_DATA         // Récupérer des données
 }
