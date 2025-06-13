@@ -23,7 +23,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
 
     if (!user) {
       await interaction.reply({
-        content: '❌ Vous devez d\'abord créer votre profil avec `/profile`',
+        content: '❌ Vous devez d\'abord créer votre profil avec `/register`',
         ephemeral: true
       });
       return;

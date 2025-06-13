@@ -197,7 +197,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
 
     if (!user) {
       await interaction.reply({
-        content: '❌ Vous devez d\'abord créer un compte! Utilisez `/profile` ou `/balance`.',
+        content: '❌ Vous devez d\'abord créer un compte! Utilisez `/register`.',
         ephemeral: true
       });
       return;
