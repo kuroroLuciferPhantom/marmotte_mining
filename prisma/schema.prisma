@@ -10,71 +10,211 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum TransactionType {
+  MINING_REWARD
+  MACHINE_PURCHASE
+  UPGRADE_COST
+  BATTLE_REWARD
+  EVENT_REWARD
+  EXCHANGE_DOLLAR_TO_TOKEN
+  EXCHANGE_TOKEN_TO_DOLLAR
+  ENERGY_COST          // Coûts énergétiques du minage
+  MAINTENANCE_COST     // Coûts de réparation des machines
+  MACHINE_BREAKDOWN    // Compensation pour pannes critiques
+  EFFICIENCY_BONUS     // Bonus pour machines bien entretenues
+  WEAR_PENALTY         // Pénalités dues à l'usure
+}
+
+enum MachineType {
+  BASIC_RIG
+  ADVANCED_RIG
+  QUANTUM_MINER
+  FUSION_REACTOR
+  MEGA_FARM
+}
+
+enum BattleStatus {
+  WAITING
+  ACTIVE
+  FINISHED
+  CANCELLED
+}
+
+enum ActivityType {
+  MESSAGE
+  REACTION
+  VOICE_TIME
+  DAILY_LOGIN
+  STREAK_BONUS
+}
+
+enum EventType {
+  PRICE_BOOST
+  MINING_BONUS
+  BATTLE_FRENZY
+  MAINTENANCE_FREE
+  DOUBLE_REWARDS
+  FLASH_SALE
+}
+
+enum AttackType {
+  VIRUS_Z3_MINER      // -50% hashrate, 2h
+  BLACKOUT_TARGETED   // Pause mining, 20min
+  FORCED_RECALIBRATION // -25% efficacité, 1h
+  DNS_HIJACKING       // 10% hashrate volé, 3h
+  BRUTAL_THEFT        // Vol direct de tokens
+}
+
+enum DefenseType {
+  ANTIVIRUS           // Annule virus
+  BACKUP_GENERATOR    // Annule blackout
+  OPTIMIZATION_SOFTWARE // Réduit durée malus 50%
+  VPN_FIREWALL        // 50% éviter attaque réseau
+  SABOTAGE_DETECTOR   // Identifie attaquant
+}
+
+enum CardRarity {
+  COMMON
+  UNCOMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+enum FragmentType {
+  ATTACK_FRAGMENT
+  DEFENSE_FRAGMENT
+  RARE_FRAGMENT
+}
+
+enum MissionType {
+  INFILTRATE_FARM     // Infiltrer une ferme de mining
+  HACK_WAREHOUSE      // Pirater un entrepôt
+  STEAL_BLUEPRINT     // Voler des plans
+  SABOTAGE_COMPETITOR // Saboter un concurrent
+  RESCUE_DATA         // Récupérer des données
+}
+
+// ============ MODÈLES PRINCIPAUX ============
+
 model User {
-  id        String   @id @default(cuid())
-  discordId String   @unique
-  username  String
-  tokens    Float    @default(0.0) // Commence avec 0 tokens
-  dollars   Float    @default(0.0)
-  energy    Int      @default(100) // Énergie pour actions spéciales
-  experience Int     @default(0)
-  level     Int      @default(1)
-  location  String   @default("Chambre chez maman") // Lieu du joueur
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(cuid())
+  discordId   String   @unique
 
-  // Relations
-  machines        Machine[]
-  battleEntries   BattleEntry[]
-  activityRewards ActivityReward[]
-  transactions    Transaction[]
-  eventParticipations EventParticipation[]
+  username    String   // Nom d'utilisateur Discord
+  location    String   @default("Chambre chez maman") // Lieu de minage
   
-  // PvP Relations
-  attackCards     AttackCard[]
-  defenseCards    DefenseCard[]
-  cardFragments   CardFragment[]
-  sabotageActions SabotageAction[] @relation("Attacker")
-  sabotageTargets SabotageAction[] @relation("Target")
-  sabotageDefenses SabotageDefense[]
-  sabotageImmunities SabotageImmunity[]
-  missionAttempts MissionAttempt[]
+  // Monnaies
+  dollars     Float    @default(0.0)
+  tokens      Float    @default(100.0)
+  
+  // Mining
+  miningActive        Boolean   @default(false)
+  lastMiningCheck     DateTime  @default(now())
+  totalMined          Float     @default(0.0)
+  
+  // Nouvelles statistiques d'usure et maintenance
+  totalEnergySpent    Float     @default(0.0)    // Total des coûts énergétiques
+  totalMaintenanceSpent Float   @default(0.0)    // Total des coûts de maintenance
+  totalMiningHours    Float     @default(0.0)    // Heures totales de minage
+  machineBreakdowns   Int       @default(0)      // Nombre total de pannes
+  lastMaintenanceAlert DateTime? // Dernière alerte de maintenance
+  
+  // Statistiques d'activité Discord
+  dailyMessageCount   Int      @default(0)
+  dailyReactionCount  Int      @default(0)
+  dailyVoiceMinutes   Float    @default(0.0)
+  lastActivityReset   DateTime @default(now())
+  loginStreak         Int      @default(0)
+  lastLogin           DateTime @default(now())
+  
+  // Relations
+  machines            Machine[]
+  transactions        Transaction[]
+  battleEntries       BattleEntry[]
+  activityRewards     ActivityReward[]
+  eventParticipations EventParticipation[]
+  attackCards         AttackCard[]
+  defenseCards        DefenseCard[]
+  cardFragments       CardFragment[]
+  attacksLaunched     SabotageAction[] @relation("Attacker")
+  attacksReceived     SabotageAction[] @relation("Target")
+  sabotageDefenses    SabotageDefense[]
+  sabotageImmunities  SabotageImmunity[]
+  missionAttempts     MissionAttempt[]
   blackMarketPurchases BlackMarketPurchase[]
-
-  // Stats
-  totalMined      Float @default(0.0)
-  battlesWon      Int   @default(0)
-  battlesLost     Int   @default(0)
-  sabotagesSuccessful Int @default(0)
-  sabotagesReceived   Int @default(0)
-  sabotagesBlocked    Int @default(0)
-  lastActive      DateTime @default(now())
-  miningActive    Boolean @default(false)
-  lastMiningCheck DateTime @default(now())
-  lastSabotage    DateTime? // Cooldown pour attaques
-  lastMission     DateTime? // Cooldown pour missions
-
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
   @@map("users")
 }
 
 model Machine {
   id          String      @id @default(cuid())
   userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
   type        MachineType
   level       Int         @default(1)
-  efficiency  Float       @default(100.0)
-  durability  Float       @default(100.0)
-  purchasedAt DateTime    @default(now())
-  lastMaintenance DateTime @default(now())
+  efficiency  Float       @default(100.0)  // 0-100%
+  durability  Float       @default(100.0)  // 0-100%
   
-  // Effets de sabotage actifs
-  hashrateDebuff Float @default(0.0) // Malus de hashrate en %
-  efficiencyDebuff Float @default(0.0) // Malus d'efficacité en %
-  sabotageEndTime DateTime? // Fin des effets de sabotage
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
+  // Nouveaux champs
+  totalMiningHours    Float   @default(0)      // Heures totales de minage
+  totalEnergyConsumed Float   @default(0)      // Énergie totale consommée
+  lastMaintenanceDate DateTime @default(now()) // Dernière maintenance
+  totalRepairCost     Float   @default(0)      // Coût total des réparations
+  breakdownCount      Int     @default(0)      // Nombre de pannes
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  history     MachineHistory[]
+  
   @@map("machines")
+}
+
+model MachineHistory {
+  id          String   @id @default(cuid())
+  machineId   String
+  machine     Machine  @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  
+  // État avant/après
+  oldDurability    Float
+  newDurability    Float
+  oldEfficiency    Float
+  newEfficiency    Float
+  
+  // Détails de l'usure
+  wearAmount       Float    // Montant d'usure appliqué
+  miningTimeHours  Float    // Temps de minage qui a causé l'usure
+  energyConsumed   Float    // Énergie consommée pendant cette période
+  
+  // Événements spéciaux
+  criticalFailure  Boolean  @default(false)
+  repaired         Boolean  @default(false)
+  repairCost       Float?   // Coût de réparation si applicable
+  
+  timestamp   DateTime @default(now())
+  
+  @@map("machine_history")
+}
+
+model MaintenanceAlert {
+  id          String   @id @default(cuid())
+  userId      String
+  machineId   String
+  
+  alertType   String   // "LOW_DURABILITY", "CRITICAL_FAILURE", "EFFICIENCY_DROP"
+  message     String
+  severity    String   // "LOW", "MEDIUM", "HIGH", "CRITICAL"
+  acknowledged Boolean @default(false)
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("maintenance_alerts")
 }
 
 model Battle {
@@ -301,94 +441,4 @@ model BlackMarketPurchase {
   offer BlackMarketOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
 
   @@map("black_market_purchases")
-}
-
-// ============ ENUMS ============
-
-enum MachineType {
-  BASIC_RIG
-  ADVANCED_RIG
-  QUANTUM_MINER
-  FUSION_REACTOR
-  MEGA_FARM
-}
-
-enum BattleStatus {
-  WAITING
-  ACTIVE
-  FINISHED
-  CANCELLED
-}
-
-enum TransactionType {
-  MINING_REWARD
-  MACHINE_PURCHASE
-  BATTLE_ENTRY
-  BATTLE_REWARD
-  ACTIVITY_REWARD
-  EVENT_REWARD
-  MAINTENANCE_COST
-  UPGRADE_COST
-  TOKEN_PURCHASE
-  DOLLAR_EXCHANGE
-  SABOTAGE_COST
-  MISSION_REWARD
-  BLACK_MARKET_PURCHASE
-  CARD_CRAFT
-  REGISTRATION_BONUS
-}
-
-enum ActivityType {
-  MESSAGE
-  REACTION
-  VOICE_TIME
-  DAILY_LOGIN
-  STREAK_BONUS
-}
-
-enum EventType {
-  PRICE_BOOST
-  MINING_BONUS
-  BATTLE_FRENZY
-  MAINTENANCE_FREE
-  DOUBLE_REWARDS
-  FLASH_SALE
-}
-
-enum AttackType {
-  VIRUS_Z3_MINER      // -50% hashrate, 2h
-  BLACKOUT_TARGETED   // Pause mining, 20min
-  FORCED_RECALIBRATION // -25% efficacité, 1h
-  DNS_HIJACKING       // 10% hashrate volé, 3h
-  BRUTAL_THEFT        // Vol direct de tokens
-}
-
-enum DefenseType {
-  ANTIVIRUS           // Annule virus
-  BACKUP_GENERATOR    // Annule blackout
-  OPTIMIZATION_SOFTWARE // Réduit durée malus 50%
-  VPN_FIREWALL        // 50% éviter attaque réseau
-  SABOTAGE_DETECTOR   // Identifie attaquant
-}
-
-enum CardRarity {
-  COMMON
-  UNCOMMON
-  RARE
-  EPIC
-  LEGENDARY
-}
-
-enum FragmentType {
-  ATTACK_FRAGMENT
-  DEFENSE_FRAGMENT
-  RARE_FRAGMENT
-}
-
-enum MissionType {
-  INFILTRATE_FARM     // Infiltrer une ferme de mining
-  HACK_WAREHOUSE      // Pirater un entrepôt
-  STEAL_BLUEPRINT     // Voler des plans
-  SABOTAGE_COMPETITOR // Saboter un concurrent
-  RESCUE_DATA         // Récupérer des données
 }

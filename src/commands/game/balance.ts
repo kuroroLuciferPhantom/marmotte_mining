@@ -60,7 +60,6 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         { name: '🪙 Tokens', value: `**${user.tokens.toFixed(2)}**`, inline: true },
         { name: '💵 Dollars', value: `**${dollarBalance.toFixed(2)}$**`, inline: true },
         { name: '📈 Valeur totale', value: `~${(user.tokens + potentialTokens).toFixed(2)} tokens`, inline: true },
-        { name: '⚡ Énergie', value: `${user.energy}/100`, inline: true },
         { name: '🔥 Statut', value: user.miningActive ? '⛏️ En minage' : '😴 Inactif', inline: true }
       )
       .addFields(

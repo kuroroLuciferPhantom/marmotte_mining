@@ -101,26 +101,61 @@ async function handleStartMining(interaction: ChatInputCommandInteraction, minin
     return;
   }
 
+  // Vérifie l'état des machines
+  const brokenMachines = user.machines.filter((m: any) => m.durability <= 0);
+  const criticalMachines = user.machines.filter((m: any) => m.durability <= 20 && m.durability > 0);
+
+  if (brokenMachines.length > 0) {
+    const brokenEmbed = new EmbedBuilder()
+      .setColor(0xE74C3C)
+      .setTitle('💀 Machines en panne détectées!')
+      .setDescription(`${brokenMachines.length} machine(s) sont en panne et ne peuvent pas miner.`)
+      .addFields(
+        { name: '🔧 Solution', value: 'Utilisez `/repair all` ou `/repair machine <id>`', inline: true },
+        { name: '💡 Conseil', value: 'Les machines en panne ne génèrent aucun token!', inline: true }
+      )
+      .setFooter({ text: 'Réparez vos machines avant de commencer le minage' });
+
+    await interaction.reply({ embeds: [brokenEmbed], ephemeral: true });
+    return;
+  }
+
   const result = await miningService.startMining(user.id);
 
   if (result.success) {
     // Calcule les statistiques de minage
     const stats = await miningService.getMiningStats(user.id);
     
+    const workingMachines = user.machines.filter((m: any) => m.durability > 0);
+    const avgEfficiency = workingMachines.reduce((sum: number, m: any) => sum + m.efficiency, 0) / workingMachines.length || 0;
+    const avgDurability = workingMachines.reduce((sum: number, m: any) => sum + m.durability, 0) / workingMachines.length || 0;
+
     const successEmbed = new EmbedBuilder()
-      .setColor(0x27AE60)
+      .setColor(avgDurability > 70 ? 0x27AE60 : avgDurability > 40 ? 0xF39C12 : 0xE74C3C)
       .setTitle('⛏️ **MINAGE DÉMARRÉ!** ⛏️')
       .setDescription(result.message)
       .addFields(
-        { name: '🏭 Machines actives', value: `${user.machines.length} machine(s)`, inline: true },
-        { name: '⚡ Production', value: `${stats?.tokensPerSecond.toFixed(4) || '0'} tokens/sec`, inline: true },
-        { name: '📈 Estimation/heure', value: `~${((stats?.tokensPerSecond || 0) * 3600).toFixed(2)} tokens`, inline: true },
+        { name: '🏭 Machines actives', value: `${workingMachines.length}/${user.machines.length} machine(s)`, inline: true },
+        { name: '⚡ Production brute', value: `${stats?.tokensPerSecond.toFixed(4) || '0'} tokens/sec`, inline: true },
+        { name: '📈 Gains/heure (brut)', value: `~${((stats?.tokensPerSecond || 0) * 3600).toFixed(2)} tokens`, inline: true },
         { name: '🔋 Consommation', value: `${stats?.powerConsumption || 0}W`, inline: true },
-        { name: '⚙️ Efficacité moyenne', value: `${stats?.efficiency.toFixed(1) || '0'}%`, inline: true },
-        { name: '💡 Info', value: 'Le minage continue même hors ligne!', inline: true }
+        { name: '💸 Coût énergie/h', value: `${stats?.energyCostPerHour.toFixed(4) || '0'} tokens`, inline: true },
+        { name: '💎 Gains nets/h', value: `~${(((stats?.tokensPerSecond || 0) * 3600) - (stats?.energyCostPerHour || 0)).toFixed(2)} tokens`, inline: true },
+        { name: '⚙️ Efficacité moy.', value: `${avgEfficiency.toFixed(1)}%`, inline: true },
+        { name: '🔧 Durabilité moy.', value: `${avgDurability.toFixed(1)}%`, inline: true },
+        { name: '⚠️ Maintenance requise', value: `${stats?.maintenanceNeeded || 0} machine(s)`, inline: true }
       )
-      .setFooter({ text: 'Utilisez /mine status pour suivre vos gains' })
+      .setFooter({ text: 'Le minage continue même hors ligne! Les machines s\'usent avec le temps.' })
       .setTimestamp();
+
+    // Ajoute des alertes si nécessaire
+    if (criticalMachines.length > 0) {
+      successEmbed.addFields({
+        name: '⚠️ Attention',
+        value: `${criticalMachines.length} machine(s) ont une faible durabilité (<20%). Pensez à les réparer!`,
+        inline: false
+      });
+    }
 
     // Boutons d'action
     const statusButton = new ButtonBuilder()
@@ -138,8 +173,14 @@ async function handleStartMining(interaction: ChatInputCommandInteraction, minin
       .setLabel('🛑 Arrêter')
       .setStyle(ButtonStyle.Danger);
 
+    const repairButton = new ButtonBuilder()
+      .setCustomId('mining_repair')
+      .setLabel('🔧 Réparer')
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(stats?.maintenanceNeeded === 0);
+
     const actionRow = new ActionRowBuilder<ButtonBuilder>()
-      .addComponents(statusButton, collectButton, stopButton);
+      .addComponents(statusButton, collectButton, stopButton, repairButton);
 
     const response = await interaction.reply({
       embeds: [successEmbed],
@@ -172,6 +213,12 @@ async function handleStartMining(interaction: ChatInputCommandInteraction, minin
         case 'mining_stop':
           await handleStopButton(buttonInteraction, miningService, user.id);
           break;
+        case 'mining_repair':
+          await buttonInteraction.reply({
+            content: '🔧 Utilisez `/repair list` pour voir l\'état de vos machines et `/repair all` pour les réparer!',
+            ephemeral: true
+          });
+          break;
       }
     });
 
@@ -180,7 +227,7 @@ async function handleStartMining(interaction: ChatInputCommandInteraction, minin
       .setColor(0xE74C3C)
       .setTitle('❌ Impossible de démarrer le minage')
       .setDescription(result.message)
-      .setFooter({ text: 'Vérifiez vos machines avec /inventory' });
+      .setFooter({ text: 'Vérifiez vos machines avec /inventory ou /repair list' });
 
     await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
   }
@@ -198,16 +245,48 @@ async function handleStopMining(interaction: ChatInputCommandInteraction, mining
   const result = await miningService.stopMining(user.id);
 
   if (result.success) {
+    const criticalWear = result.wearReport?.filter(w => w.criticalFailure).length || 0;
+    const highWear = result.wearReport?.filter(w => w.newDurability <= 20 && !w.criticalFailure).length || 0;
+
     const successEmbed = new EmbedBuilder()
-      .setColor(0xF39C12)
+      .setColor(criticalWear > 0 ? 0xE74C3C : highWear > 0 ? 0xF39C12 : 0x27AE60)
       .setTitle('🛑 **MINAGE ARRÊTÉ**')
-      .setDescription(result.message)
+      .setDescription('Voici le bilan de votre session de minage:')
       .addFields(
-        { name: '💰 Récompenses gagnées', value: `**${result.rewards?.toFixed(4) || '0'} tokens**`, inline: true },
-        { name: '💡 Conseil', value: 'Vous pouvez redémarrer le minage quand vous voulez!', inline: true }
-      )
-      .setFooter({ text: 'Merci d\'avoir miné avec nous!' })
-      .setTimestamp();
+        { name: '💰 Gains bruts', value: `**${(result.rewards! + result.energyCost!).toFixed(4)} tokens**`, inline: true },
+        { name: '⚡ Coût énergie', value: `**-${result.energyCost?.toFixed(4)} tokens**`, inline: true },
+        { name: '💎 Gains nets', value: `**${result.rewards?.toFixed(4)} tokens**`, inline: true }
+      );
+
+    // Ajoute les informations d'usure
+    if (result.wearReport && result.wearReport.length > 0) {
+      const wearSummary = result.wearReport.map(w => {
+        const wearAmount = w.oldDurability - w.newDurability;
+        const status = w.criticalFailure ? '💀' : w.newDurability <= 20 ? '🔴' : w.newDurability <= 50 ? '🟡' : '🟢';
+        return `${status} Machine: -${wearAmount.toFixed(1)}% durabilité`;
+      }).join('\n');
+
+      successEmbed.addFields(
+        { name: '🔧 Usure des machines', value: wearSummary, inline: false }
+      );
+
+      if (criticalWear > 0) {
+        successEmbed.addFields(
+          { name: '💀 Machines en panne', value: `${criticalWear} machine(s) nécessitent une réparation immédiate!`, inline: false }
+        );
+      } else if (highWear > 0) {
+        successEmbed.addFields(
+          { name: '⚠️ Maintenance recommandée', value: `${highWear} machine(s) ont une faible durabilité`, inline: false }
+        );
+      }
+    }
+
+    successEmbed.addFields(
+      { name: '💡 Conseils', value: 'Les machines s\'usent avec le temps. Pensez à les réparer régulièrement pour maintenir l\'efficacité!', inline: false }
+    );
+
+    successEmbed.setFooter({ text: 'Vous pouvez redémarrer le minage quand vous voulez!' })
+              .setTimestamp();
 
     await interaction.reply({ embeds: [successEmbed] });
   } else {
@@ -232,67 +311,76 @@ async function handleMiningStatus(interaction: ChatInputCommandInteraction, mini
   // Calcule le temps de minage
   const now = new Date();
   const miningTime = user.miningActive 
-    ? Math.floor((now.getTime() - user.lastMiningCheck.getTime()) / 1000 / 60) // en minutes
+    ? Math.floor((now.getTime() - user.lastMiningCheck.getTime()) / 1000 / 60)
     : 0;
+
+  const workingMachines = user.machines.filter((m: any) => m.durability > 0);
+  const netGainsPerHour = (stats.tokensPerSecond * 3600) - stats.energyCostPerHour;
 
   const statusEmbed = new EmbedBuilder()
     .setColor(user.miningActive ? 0x27AE60 : 0x95A5A6)
-    .setTitle(`⛏️ **STATUT DE MINAGE** - ${user.miningActive ? '🟢 ACTIF' : '🔴 INACTIF'}`)
-    .setDescription(user.miningActive ? 'Vos machines travaillent dur!' : 'Le minage est actuellement arrêté')
+    .setTitle(`⛏️ Statut - ${user.miningActive ? '🟢 ACTIF' : '🔴 INACTIF'}`)
     .addFields(
-      { name: '🏭 Machines', value: `${stats.totalMachines} machine(s)`, inline: true },
-      { name: '⚡ Production', value: `${stats.tokensPerSecond.toFixed(4)} tokens/sec`, inline: true },
-      { name: '🔋 Consommation', value: `${stats.powerConsumption}W`, inline: true },
-      { name: '⚙️ Efficacité', value: `${stats.efficiency.toFixed(1)}%`, inline: true },
-      { name: '📈 Gains/heure', value: `~${(stats.tokensPerSecond * 3600).toFixed(2)} tokens`, inline: true },
-      { name: '⏱️ Temps actif', value: user.miningActive ? `${miningTime} minutes` : 'Arrêté', inline: true }
+      { name: '🏭 Machines', value: `${workingMachines.length}/${user.machines.length}`, inline: true },
+      { name: '💎 Gains nets/h', value: `${netGainsPerHour.toFixed(2)} tokens`, inline: true },
+      { name: '⏱️ Temps actif', value: `${miningTime} min`, inline: true }
     );
 
-  if (user.miningActive) {
+  if (stats.maintenanceNeeded > 0) {
     statusEmbed.addFields(
-      { name: '💰 Gains estimés actuels', value: `~${(stats.tokensPerSecond * miningTime * 60).toFixed(4)} tokens`, inline: false }
+      { name: '⚠️ Maintenance', value: `${stats.maintenanceNeeded} machine(s)`, inline: true }
     );
   }
 
-  statusEmbed.setFooter({ text: user.miningActive ? 'Utilisez /mine collect pour récupérer vos gains' : 'Utilisez /mine start pour commencer' })
-          .setTimestamp();
-
-  await interaction.reply({ embeds: [statusEmbed] });
+  await interaction.reply({ embeds: [statusEmbed], ephemeral: true });
 }
 
-async function handleCollectRewards(interaction: ChatInputCommandInteraction, miningService: MiningService, user: any) {
-  if (!user.miningActive) {
-    await interaction.reply({
-      content: '❌ Vous n\'êtes pas en train de miner! Aucune récompense à collecter.',
-      ephemeral: true
-    });
-    return;
-  }
 
-  const rewards = await miningService.collectMiningRewards(user.id);
 
-  if (rewards > 0) {
-    const collectEmbed = new EmbedBuilder()
-      .setColor(0xF1C40F)
-      .setTitle('💰 **RÉCOMPENSES COLLECTÉES!**')
-      .setDescription(`Vous avez gagné **${rewards.toFixed(4)} tokens**!`)
+async function handleStopButton(buttonInteraction: any, miningService: MiningService, userId: string) {
+  const result = await miningService.stopMining(userId);
+
+  if (result.success) {
+    const criticalWear = result.wearReport?.filter(w => w.criticalFailure).length || 0;
+    
+    let statusColor = 0x27AE60;
+    let statusText = 'Minage arrêté avec succès!';
+    
+    if (criticalWear > 0) {
+      statusColor = 0xE74C3C;
+      statusText = `Minage arrêté - ${criticalWear} machine(s) en panne!`;
+    }
+
+    const stopEmbed = new EmbedBuilder()
+      .setColor(statusColor)
+      .setTitle('🛑 Minage arrêté')
+      .setDescription(statusText)
       .addFields(
-        { name: '✅ Statut', value: 'Minage toujours actif', inline: true },
-        { name: '⏱️ Prochaine collecte', value: 'Disponible immédiatement', inline: true }
-      )
-      .setFooter({ text: 'Le minage continue... Revenez plus tard!' })
-      .setTimestamp();
+        { name: '💎 Gains nets', value: `**${result.rewards?.toFixed(4) || '0'} tokens**`, inline: true },
+        { name: '⚡ Coût énergie', value: `${result.energyCost?.toFixed(4) || '0'} tokens`, inline: true }
+      );
 
-    await interaction.reply({ embeds: [collectEmbed] });
+    if (criticalWear > 0) {
+      stopEmbed.addFields(
+        { name: '🔧 Action requise', value: 'Utilisez `/repair` pour réparer vos machines!', inline: false }
+      );
+    }
+
+    stopEmbed.setFooter({ text: 'Vous pouvez redémarrer quand vous voulez' });
+
+    await buttonInteraction.update({
+      embeds: [stopEmbed],
+      components: []
+    });
   } else {
-    await interaction.reply({
-      content: '💤 Aucune récompense à collecter pour le moment. Attendez un peu plus!',
+    await buttonInteraction.reply({
+      content: `❌ ${result.message}`,
       ephemeral: true
     });
   }
 }
 
-// Fonctions pour les boutons interactifs
+// Fonctions pour les boutons interactifs (versions améliorées)
 async function handleMiningStatusButton(buttonInteraction: any, miningService: MiningService, userId: string) {
   const user = await buttonInteraction.client.services.get('database').client.user.findUnique({
     where: { id: userId },
@@ -311,27 +399,95 @@ async function handleMiningStatusButton(buttonInteraction: any, miningService: M
 
   const now = new Date();
   const miningTime = user.miningActive 
-    ? Math.floor((now.getTime() - user.lastMiningCheck.getTime()) / 1000 / 60)
+    ? Math.floor((now.getTime() - user.lastMiningCheck.getTime()) / 1000 / 60) // en minutes
     : 0;
 
+  const workingMachines = user.machines.filter((m: any) => m.durability > 0);
+  const brokenMachines = user.machines.filter((m: any) => m.durability <= 0);
+  const netGainsPerHour = (stats.tokensPerSecond * 3600) - stats.energyCostPerHour;
+  
+  // Calcule les gains estimés actuels
+  const currentGrossGains = user.miningActive ? stats.tokensPerSecond * miningTime * 60 : 0;
+  const currentEnergyCost = user.miningActive ? (stats.energyCostPerHour / 60) * miningTime : 0;
+  const currentNetGains = Math.max(0, currentGrossGains - currentEnergyCost);
+
   const statusEmbed = new EmbedBuilder()
-    .setColor(user.miningActive ? 0x27AE60 : 0x95A5A6)
-    .setTitle(`⛏️ Statut de minage - ${user.miningActive ? '🟢 ACTIF' : '🔴 INACTIF'}`)
+    .setColor(
+      brokenMachines.length > 0 ? 0xE74C3C :
+      stats.maintenanceNeeded > 0 ? 0xF39C12 :
+      user.miningActive ? 0x27AE60 : 0x95A5A6
+    )
+    .setTitle(`⛏️ Statut Détaillé - ${user.miningActive ? '🟢 ACTIF' : '🔴 INACTIF'}`)
     .addFields(
-      { name: '🏭 Machines', value: `${stats.totalMachines}`, inline: true },
-      { name: '⚡ Production', value: `${stats.tokensPerSecond.toFixed(4)}/sec`, inline: true },
+      { name: '🏭 Machines', value: `${workingMachines.length}/${user.machines.length} opérationnelles`, inline: true },
+      { name: '⚡ Production brute', value: `${stats.tokensPerSecond.toFixed(4)} tokens/sec`, inline: true },
+      { name: '💸 Coût énergie/h', value: `${stats.energyCostPerHour.toFixed(4)} tokens`, inline: true },
+      { name: '💎 Gains nets/h', value: `${netGainsPerHour.toFixed(2)} tokens`, inline: true },
+      { name: '⚙️ Efficacité moy.', value: `${stats.efficiency.toFixed(1)}%`, inline: true },
       { name: '⏱️ Temps actif', value: `${miningTime} min`, inline: true }
     );
+
+  if (user.miningActive && miningTime > 0) {
+    statusEmbed.addFields(
+      { name: '💰 Gains actuels (brut)', value: `${currentGrossGains.toFixed(4)} tokens`, inline: true },
+      { name: '⚡ Coût énergie actuel', value: `${currentEnergyCost.toFixed(4)} tokens`, inline: true },
+      { name: '💎 Gains nets actuels', value: `${currentNetGains.toFixed(4)} tokens`, inline: true }
+    );
+  }
+
+  // Alertes de maintenance
+  if (brokenMachines.length > 0) {
+    statusEmbed.addFields(
+      { name: '💀 Machines en panne', value: `${brokenMachines.length} machine(s) - Réparation obligatoire!`, inline: false }
+    );
+  }
+
+  if (stats.maintenanceNeeded > 0) {
+    statusEmbed.addFields(
+      { name: '⚠️ Maintenance recommandée', value: `${stats.maintenanceNeeded} machine(s) avec durabilité < 50%`, inline: false }
+    );
+  }
+
+  statusEmbed.setFooter({ 
+    text: user.miningActive 
+      ? 'Collectez régulièrement vos gains!' 
+      : 'Réparez vos machines et redémarrez le minage' 
+  });
 
   await buttonInteraction.reply({ embeds: [statusEmbed], ephemeral: true });
 }
 
 async function handleCollectButton(buttonInteraction: any, miningService: MiningService, userId: string) {
+  const user = await buttonInteraction.client.services.get('database').client.user.findUnique({
+    where: { id: userId },
+    include: { machines: true }
+  });
+
+  if (!user || !user.miningActive) {
+    await buttonInteraction.reply({
+      content: '❌ Vous n\'êtes pas en train de miner!',
+      ephemeral: true
+    });
+    return;
+  }
+
+  // Calcule le temps de minage et les gains estimés
+  const now = new Date();
+  const miningTimeMinutes = Math.floor((now.getTime() - user.lastMiningCheck.getTime()) / 1000 / 60);
+  
+  if (miningTimeMinutes < 1) {
+    await buttonInteraction.reply({
+      content: '💤 Attendez au moins 1 minute avant de collecter!',
+      ephemeral: true
+    });
+    return;
+  }
+
   const rewards = await miningService.collectMiningRewards(userId);
 
   if (rewards > 0) {
     await buttonInteraction.reply({
-      content: `💰 **+${rewards.toFixed(4)} tokens** collectés! Le minage continue...`,
+      content: `💰 **+${rewards.toFixed(4)} tokens** collectés après ${miningTimeMinutes} min de minage!\n🔋 Coûts énergétiques déjà déduits. Le minage continue...`,
       ephemeral: true
     });
   } else {
@@ -342,23 +498,72 @@ async function handleCollectButton(buttonInteraction: any, miningService: Mining
   }
 }
 
-async function handleStopButton(buttonInteraction: any, miningService: MiningService, userId: string) {
-  const result = await miningService.stopMining(userId);
-
-  if (result.success) {
-    const stopEmbed = new EmbedBuilder()
-      .setColor(0xF39C12)
-      .setTitle('🛑 Minage arrêté')
-      .setDescription(`💰 **${result.rewards?.toFixed(4) || '0'} tokens** gagnés au total!`)
-      .setFooter({ text: 'Vous pouvez redémarrer quand vous voulez' });
-
-    await buttonInteraction.update({
-      embeds: [stopEmbed],
-      components: []
+async function handleCollectRewards(interaction: ChatInputCommandInteraction, miningService: MiningService, user: any) {
+  if (!user.miningActive) {
+    await interaction.reply({
+      content: '❌ Vous n\'êtes pas en train de miner! Aucune récompense à collecter.',
+      ephemeral: true
     });
+    return;
+  }
+
+  // Calcule les statistiques avant collecte pour estimer les gains
+  const stats = await miningService.getMiningStats(user.id);
+  const now = new Date();
+  const miningTimeMinutes = Math.floor((now.getTime() - user.lastMiningCheck.getTime()) / 1000 / 60);
+  
+  if (miningTimeMinutes < 1) {
+    await interaction.reply({
+      content: '💤 Attendez au moins 1 minute avant de collecter vos premières récompenses!',
+      ephemeral: true
+    });
+    return;
+  }
+
+  const estimatedGrossGains = stats ? stats.tokensPerSecond * miningTimeMinutes * 60 : 0;
+  const estimatedEnergyCost = stats ? (stats.energyCostPerHour / 60) * miningTimeMinutes : 0;
+  const estimatedNetGains = Math.max(0, estimatedGrossGains - estimatedEnergyCost);
+
+  const rewards = await miningService.collectMiningRewards(user.id);
+
+  if (rewards > 0) {
+    const collectEmbed = new EmbedBuilder()
+      .setColor(0xF1C40F)
+      .setTitle('💰 **RÉCOMPENSES COLLECTÉES!**')
+      .setDescription(`Session de **${miningTimeMinutes} minutes** terminée`)
+      .addFields(
+        { name: '💰 Gains bruts estimés', value: `${estimatedGrossGains.toFixed(4)} tokens`, inline: true },
+        { name: '⚡ Coût énergie estimé', value: `${estimatedEnergyCost.toFixed(4)} tokens`, inline: true },
+        { name: '💎 Gains nets reçus', value: `**${rewards.toFixed(4)} tokens**`, inline: true },
+        { name: '✅ Statut', value: 'Minage toujours actif', inline: true },
+        { name: '⏱️ Prochaine collecte', value: 'Disponible immédiatement', inline: true },
+        { name: '🔋 Info', value: 'Coûts énergétiques déjà déduits', inline: true }
+      );
+
+    // Ajoute des conseils basés sur la performance
+    const efficiency = estimatedGrossGains > 0 ? (rewards / estimatedGrossGains) * 100 : 0;
+    
+    if (efficiency < 70) {
+      collectEmbed.addFields({
+        name: '💡 Conseil',
+        value: `Efficacité: ${efficiency.toFixed(1)}% - Vos machines ont besoin de maintenance pour optimiser les gains!`,
+        inline: false
+      });
+    } else if (efficiency > 90) {
+      collectEmbed.addFields({
+        name: '✨ Excellent!',
+        value: `Efficacité: ${efficiency.toFixed(1)}% - Vos machines sont en excellent état!`,
+        inline: false
+      });
+    }
+
+    collectEmbed.setFooter({ text: 'Le minage continue... Surveillez l\'usure de vos machines!' })
+              .setTimestamp();
+
+    await interaction.reply({ embeds: [collectEmbed] });
   } else {
-    await buttonInteraction.reply({
-      content: `❌ ${result.message}`,
+    await interaction.reply({
+      content: '💤 Aucune récompense à collecter pour le moment. Attendez un peu plus!',
       ephemeral: true
     });
   }

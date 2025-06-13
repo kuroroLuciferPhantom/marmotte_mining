@@ -33,8 +33,6 @@ export async function execute(interaction: ChatInputCommandInteraction, services
           { name: '🪙 Tokens', value: `${existingUser.tokens.toFixed(2)}`, inline: true },
           { name: '💵 Dollars', value: `${existingUser.dollars.toFixed(2)}$`, inline: true },
           { name: '🏭 Machines', value: `${existingUser.machines.length} machine(s)`, inline: true },
-          { name: '⚡ Énergie', value: `${existingUser.energy}/100`, inline: true },
-          { name: '📊 Niveau', value: `${existingUser.level}`, inline: true }
         )
         .addFields({
           name: '💡 Commandes utiles',
@@ -192,10 +190,7 @@ async function handleRegistration(buttonInteraction: any, services: Map<string, 
           username: buttonInteraction.user.displayName || buttonInteraction.user.username,
           tokens: 0.0,
           dollars: 0.0,
-          energy: 100,
           location: "Chambre chez maman",
-          experience: 0,
-          level: 1
         }
       });
 
