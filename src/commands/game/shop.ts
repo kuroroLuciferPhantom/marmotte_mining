@@ -7,9 +7,10 @@ import {
   ComponentType,
   StringSelectMenuInteraction,
   ButtonBuilder,
-  ButtonStyle
+  ButtonStyle,
+  ButtonInteraction
 } from 'discord.js';
-import { MachineType, AttackType, DefenseType, CardRarity, FragmentType } from '@prisma/client';
+import { MachineType, AttackType, DefenseType, CardRarity, FragmentType, TransactionType } from '@prisma/client';
 import { MiningService } from '../../services/mining/MiningService';
 
 export const data = new SlashCommandBuilder()
@@ -26,7 +27,7 @@ enum ShopCategory {
   CONSUMABLES = 'consumables'
 }
 
-// Configuration des machines avec emojis et descriptions
+// Configuration des machines
 const machineInfo = {
   BASIC_RIG: {
     name: '🔧 BASIC RIG',
@@ -186,7 +187,6 @@ const consumableInfo = {
 
 export async function execute(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   try {
-    const miningService = services.get('mining') as MiningService;
     const databaseService = services.get('database');
     
     // Récupère l'utilisateur actuel
@@ -204,7 +204,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
     }
 
     // Affiche l'interface principale de la boutique
-    await showMainShop(interaction, user);
+    await showMainShop(interaction, user, services);
 
   } catch (error) {
     console.error('Error in shop command:', error);
@@ -222,7 +222,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
   }
 }
 
-async function showMainShop(interaction: ChatInputCommandInteraction, user: any) {
+async function showMainShop(interaction: ChatInputCommandInteraction | ButtonInteraction, user: any, services: Map<string, any>) {
   const mainEmbed = new EmbedBuilder()
     .setColor(0x3498DB)
     .setTitle('🛒 **BOUTIQUE GÉNÉRALE** 🛒')
@@ -254,16 +254,35 @@ async function showMainShop(interaction: ChatInputCommandInteraction, user: any)
         inline: true
       },
       {
-        name: '💡 **NOUVEAUTÉS**',
-        value: `🆕 Produits récemment ajoutés\n🔥 Offres spéciales\n⭐ Articles populaires`,
+        name: '💡 **CONSEILS**',
+        value: `💰 Commencez par une machine\n🛡️ Investissez en défenses\n⚡ Gérez votre énergie`,
         inline: true
       }
     )
     .setFooter({ text: 'Utilisez le menu ci-dessous pour naviguer' })
     .setTimestamp();
 
-  // Menu principal de catégories
-  const categoryMenu = new StringSelectMenuBuilder()
+  const categoryMenu = createCategoryMenu();
+  const actionRow = new ActionRowBuilder<StringSelectMenuBuilder>()
+    .addComponents(categoryMenu);
+
+  if (interaction instanceof ChatInputCommandInteraction) {
+    const response = await interaction.reply({
+      embeds: [mainEmbed],
+      components: [actionRow],
+      fetchReply: true
+    });
+    setupMainCollector(response, interaction, services);
+  } else {
+    await interaction.update({
+      embeds: [mainEmbed],
+      components: [actionRow]
+    });
+  }
+}
+
+function createCategoryMenu() {
+  return new StringSelectMenuBuilder()
     .setCustomId('shop_category_select')
     .setPlaceholder('🏪 Choisissez une catégorie...')
     .addOptions([
@@ -298,63 +317,48 @@ async function showMainShop(interaction: ChatInputCommandInteraction, user: any)
         emoji: '🧪'
       }
     ]);
+}
 
-  const actionRow = new ActionRowBuilder<StringSelectMenuBuilder>()
-    .addComponents(categoryMenu);
-
-  const response = await interaction.reply({
-    embeds: [mainEmbed],
-    components: [actionRow],
-    fetchReply: true
-  });
-
-  // Collecteur pour les interactions du menu
+function setupMainCollector(response: any, interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   const collector = response.createMessageComponentCollector({
-    componentType: ComponentType.StringSelect,
     time: 300000 // 5 minutes
   });
 
-  collector.on('collect', async (selectInteraction: StringSelectMenuInteraction) => {
-    if (selectInteraction.user.id !== interaction.user.id) {
-      await selectInteraction.reply({
+  collector.on('collect', async (componentInteraction) => {
+    if (componentInteraction.user.id !== interaction.user.id) {
+      await componentInteraction.reply({
         content: '❌ Vous ne pouvez pas utiliser cette boutique!',
         ephemeral: true
       });
       return;
     }
 
-    const category = selectInteraction.values[0] as ShopCategory;
-    
     // Récupère les données utilisateur actualisées
-    const currentUser = await selectInteraction.client.services?.get('database')?.client.user.findUnique({
+    const currentUser = await services.get('database').client.user.findUnique({
       where: { discordId: interaction.user.id },
       include: { machines: true }
-    }) || user;
+    });
 
-    switch (category) {
-      case ShopCategory.MINING:
-        await showMiningCategory(selectInteraction, currentUser, services);
-        break;
-      case ShopCategory.ATTACK_CARDS:
-        await showAttackCardsCategory(selectInteraction, currentUser);
-        break;
-      case ShopCategory.DEFENSE_CARDS:
-        await showDefenseCardsCategory(selectInteraction, currentUser);
-        break;
-      case ShopCategory.FRAGMENTS:
-        await showFragmentsCategory(selectInteraction, currentUser);
-        break;
-      case ShopCategory.CONSUMABLES:
-        await showConsumablesCategory(selectInteraction, currentUser);
-        break;
+    if (componentInteraction.isStringSelectMenu()) {
+      const selectInteraction = componentInteraction as StringSelectMenuInteraction;
+      
+      if (selectInteraction.customId === 'shop_category_select') {
+        const category = selectInteraction.values[0] as ShopCategory;
+        await handleCategorySelection(selectInteraction, currentUser, services, category);
+      } else {
+        await handleProductSelection(selectInteraction, currentUser, services);
+      }
+    } else if (componentInteraction.isButton()) {
+      const buttonInteraction = componentInteraction as ButtonInteraction;
+      await handleButtonClick(buttonInteraction, currentUser, services);
     }
   });
 
-  // Nettoyage après expiration
   collector.on('end', async () => {
     try {
+      const disabledMenu = createCategoryMenu().setDisabled(true);
       const disabledRow = new ActionRowBuilder<StringSelectMenuBuilder>()
-        .addComponents(categoryMenu.setDisabled(true));
+        .addComponents(disabledMenu);
 
       await interaction.editReply({
         components: [disabledRow]
@@ -363,6 +367,26 @@ async function showMainShop(interaction: ChatInputCommandInteraction, user: any)
       // Ignore les erreurs de modification après expiration
     }
   });
+}
+
+async function handleCategorySelection(interaction: StringSelectMenuInteraction, user: any, services: Map<string, any>, category: ShopCategory) {
+  switch (category) {
+    case ShopCategory.MINING:
+      await showMiningCategory(interaction, user, services);
+      break;
+    case ShopCategory.ATTACK_CARDS:
+      await showAttackCardsCategory(interaction, user);
+      break;
+    case ShopCategory.DEFENSE_CARDS:
+      await showDefenseCardsCategory(interaction, user);
+      break;
+    case ShopCategory.FRAGMENTS:
+      await showFragmentsCategory(interaction, user);
+      break;
+    case ShopCategory.CONSUMABLES:
+      await showConsumablesCategory(interaction, user);
+      break;
+  }
 }
 
 async function showMiningCategory(interaction: StringSelectMenuInteraction, user: any, services: Map<string, any>) {
@@ -386,42 +410,30 @@ async function showMiningCategory(interaction: StringSelectMenuInteraction, user
     )
     .setFooter({ text: '💡 Plus le prix est élevé, plus les gains sont importants!' });
 
-  // Menu pour sélectionner une machine
   const machineMenu = new StringSelectMenuBuilder()
     .setCustomId('shop_machine_select')
     .setPlaceholder('🛒 Choisissez une machine à acheter...')
     .addOptions(
       Object.entries(machineConfigs).map(([type, config]) => {
         const info = machineInfo[type as MachineType];
-        
         return {
           label: `${info.name} - ${config.cost} tokens`,
           description: `${info.description} | ⚡${config.baseHashRate}/s`,
-          value: type,
+          value: `machine_${type}`,
           emoji: info.emoji
         };
       })
     );
 
-  // Bouton retour
-  const backButton = new ButtonBuilder()
-    .setCustomId('shop_back_main')
-    .setLabel('🔙 Retour')
-    .setStyle(ButtonStyle.Secondary);
-
-  const machineRow = new ActionRowBuilder<StringSelectMenuBuilder>()
-    .addComponents(machineMenu);
-  
-  const buttonRow = new ActionRowBuilder<ButtonBuilder>()
-    .addComponents(backButton);
+  const components = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(machineMenu),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(createBackButton())
+  ];
 
   await interaction.update({
     embeds: [miningEmbed],
-    components: [machineRow, buttonRow]
+    components
   });
-
-  // Collecteur pour cette catégorie
-  setupCategoryCollector(interaction, user, services, 'mining');
 }
 
 async function showAttackCardsCategory(interaction: StringSelectMenuInteraction, user: any) {
@@ -441,5 +453,539 @@ async function showAttackCardsCategory(interaction: StringSelectMenuInteraction,
     )
     .setFooter({ text: '⚠️ Utilisez ces cartes avec parcimonie!' });
 
-  await showCategoryWithBack(interaction, attackEmbed, 'attack');
+  const attackMenu = new StringSelectMenuBuilder()
+    .setCustomId('shop_attack_select')
+    .setPlaceholder('⚔️ Choisissez une carte d\'attaque...')
+    .addOptions(
+      Object.entries(attackCardInfo).map(([type, info]) => ({
+        label: `${info.name} - ${info.price} tokens`,
+        description: info.description,
+        value: `attack_${type}`,
+        emoji: info.emoji
+      }))
+    );
+
+  const components = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(attackMenu),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(createBackButton())
+  ];
+
+  await interaction.update({
+    embeds: [attackEmbed],
+    components
+  });
+}
+
+async function showDefenseCardsCategory(interaction: StringSelectMenuInteraction, user: any) {
+  const defenseEmbed = new EmbedBuilder()
+    .setColor(0x27AE60)
+    .setTitle('🛡️ **CARTES DE DÉFENSE** 🛡️')
+    .setDescription(`**💰 Budget**: ${user.tokens.toFixed(2)} tokens\n\n*Protégez vos investissements contre les attaques!*`)
+    .addFields(
+      {
+        name: '🔒 **DÉFENSES DISPONIBLES**',
+        value: Object.entries(defenseCardInfo).map(([type, info]) => {
+          const affordable = user.tokens >= info.price ? '✅' : '❌';
+          return `${affordable} ${info.emoji} **${info.name}**\n💰 ${info.price} tokens\n📝 ${info.description}`;
+        }).join('\n\n'),
+        inline: false
+      }
+    )
+    .setFooter({ text: '🛡️ Une bonne défense est essentielle!' });
+
+  const defenseMenu = new StringSelectMenuBuilder()
+    .setCustomId('shop_defense_select')
+    .setPlaceholder('🛡️ Choisissez une carte de défense...')
+    .addOptions(
+      Object.entries(defenseCardInfo).map(([type, info]) => ({
+        label: `${info.name} - ${info.price} tokens`,
+        description: info.description,
+        value: `defense_${type}`,
+        emoji: info.emoji
+      }))
+    );
+
+  const components = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(defenseMenu),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(createBackButton())
+  ];
+
+  await interaction.update({
+    embeds: [defenseEmbed],
+    components
+  });
+}
+
+async function showFragmentsCategory(interaction: StringSelectMenuInteraction, user: any) {
+  const fragmentEmbed = new EmbedBuilder()
+    .setColor(0x9B59B6)
+    .setTitle('🧩 **FRAGMENTS** 🧩')
+    .setDescription(`**💰 Budget**: ${user.tokens.toFixed(2)} tokens\n\n*Collectez des fragments pour crafter des cartes puissantes!*`)
+    .addFields(
+      {
+        name: '🔧 **MATÉRIAUX DISPONIBLES**',
+        value: Object.entries(fragmentInfo).map(([type, info]) => {
+          const affordable = user.tokens >= info.price ? '✅' : '❌';
+          return `${affordable} ${info.emoji} **${info.name}**\n💰 ${info.price} tokens\n📝 ${info.description}`;
+        }).join('\n\n'),
+        inline: false
+      },
+      {
+        name: '💡 **INFO CRAFT**',
+        value: `🔴 5 fragments d'attaque = 1 carte d'attaque\n🔵 5 fragments de défense = 1 carte de défense\n🟡 Fragments rares pour objets spéciaux`,
+        inline: false
+      }
+    )
+    .setFooter({ text: '🧩 Utilisez /craft pour fabriquer des cartes!' });
+
+  const fragmentMenu = new StringSelectMenuBuilder()
+    .setCustomId('shop_fragment_select')
+    .setPlaceholder('🧩 Choisissez des fragments...')
+    .addOptions(
+      Object.entries(fragmentInfo).map(([type, info]) => ({
+        label: `${info.name} - ${info.price} tokens`,
+        description: info.description,
+        value: `fragment_${type}`,
+        emoji: info.emoji
+      }))
+    );
+
+  const components = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(fragmentMenu),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(createBackButton())
+  ];
+
+  await interaction.update({
+    embeds: [fragmentEmbed],
+    components
+  });
+}
+
+async function showConsumablesCategory(interaction: StringSelectMenuInteraction, user: any) {
+  const consumableEmbed = new EmbedBuilder()
+    .setColor(0xF39C12)
+    .setTitle('🧪 **CONSOMMABLES** 🧪')
+    .setDescription(`**💰 Budget**: ${user.tokens.toFixed(2)} tokens\n**⚡ Énergie**: ${user.energy}/100\n\n*Objets à usage unique pour booster vos performances!*`)
+    .addFields(
+      {
+        name: '💊 **POTIONS ET BOOSTS**',
+        value: Object.entries(consumableInfo).map(([type, info]) => {
+          const affordable = user.tokens >= info.price ? '✅' : '❌';
+          return `${affordable} ${info.emoji} **${info.name}**\n💰 ${info.price} tokens\n📝 ${info.description}`;
+        }).join('\n\n'),
+        inline: false
+      }
+    )
+    .setFooter({ text: '🧪 Effets temporaires mais puissants!' });
+
+  const consumableMenu = new StringSelectMenuBuilder()
+    .setCustomId('shop_consumable_select')
+    .setPlaceholder('🧪 Choisissez un consommable...')
+    .addOptions(
+      Object.entries(consumableInfo).map(([type, info]) => ({
+        label: `${info.name} - ${info.price} tokens`,
+        description: info.description,
+        value: `consumable_${type}`,
+        emoji: info.emoji
+      }))
+    );
+
+  const components = [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(consumableMenu),
+    new ActionRowBuilder<ButtonBuilder>().addComponents(createBackButton())
+  ];
+
+  await interaction.update({
+    embeds: [consumableEmbed],
+    components
+  });
+}
+
+function createBackButton(): ButtonBuilder {
+  return new ButtonBuilder()
+    .setCustomId('shop_back_main')
+    .setLabel('🔙 Retour')
+    .setStyle(ButtonStyle.Secondary);
+}
+
+async function handleProductSelection(interaction: StringSelectMenuInteraction, user: any, services: Map<string, any>) {
+  const productId = interaction.values[0];
+  const [category, itemType] = productId.split('_');
+
+  let productInfo: any;
+  let price: number;
+
+  switch (category) {
+    case 'machine':
+      const miningService = services.get('mining') as MiningService;
+      const machineConfigs = miningService.getMachineConfigs();
+      const machineConfig = machineConfigs[itemType as MachineType];
+      productInfo = {
+        ...machineInfo[itemType as MachineType],
+        ...machineConfig
+      };
+      price = machineConfig.cost;
+      break;
+    case 'attack':
+      productInfo = attackCardInfo[itemType as keyof typeof attackCardInfo];
+      price = productInfo.price;
+      break;
+    case 'defense':
+      productInfo = defenseCardInfo[itemType as keyof typeof defenseCardInfo];
+      price = productInfo.price;
+      break;
+    case 'fragment':
+      productInfo = fragmentInfo[itemType as keyof typeof fragmentInfo];
+      price = productInfo.price;
+      break;
+    case 'consumable':
+      productInfo = consumableInfo[itemType as keyof typeof consumableInfo];
+      price = productInfo.price;
+      break;
+    default:
+      await interaction.reply({
+        content: '❌ Produit non reconnu.',
+        ephemeral: true
+      });
+      return;
+  }
+
+  if (user.tokens < price) {
+    await interaction.reply({
+      content: `❌ Fonds insuffisants! Vous avez besoin de **${price} tokens** mais vous n'avez que **${user.tokens.toFixed(2)} tokens**.`,
+      ephemeral: true
+    });
+    return;
+  }
+
+  // Affiche la confirmation d'achat
+  const confirmEmbed = new EmbedBuilder()
+    .setColor(0xE67E22)
+    .setTitle(`${productInfo.emoji} Confirmer l'achat`)
+    .setDescription(`**Produit**: ${productInfo.name}\n**Prix**: ${price} tokens\n**Description**: ${productInfo.description}`)
+    .addFields(
+      { name: '💰 Solde actuel', value: `${user.tokens.toFixed(2)} tokens`, inline: true },
+      { name: '💰 Solde après achat', value: `${(user.tokens - price).toFixed(2)} tokens`, inline: true }
+    )
+    .setFooter({ text: 'Confirmez-vous cet achat?' });
+
+  const confirmButton = new ButtonBuilder()
+    .setCustomId(`confirm_purchase_${productId}`)
+    .setLabel('✅ Confirmer l\'achat')
+    .setStyle(ButtonStyle.Success);
+
+  const cancelButton = new ButtonBuilder()
+    .setCustomId('cancel_purchase')
+    .setLabel('❌ Annuler')
+    .setStyle(ButtonStyle.Danger);
+
+  const confirmRow = new ActionRowBuilder<ButtonBuilder>()
+    .addComponents(confirmButton, cancelButton);
+
+  await interaction.update({
+    embeds: [confirmEmbed],
+    components: [confirmRow]
+  });
+}
+
+async function handleButtonClick(interaction: ButtonInteraction, user: any, services: Map<string, any>) {
+  if (interaction.customId === 'shop_back_main') {
+    await showMainShop(interaction, user, services);
+  } else if (interaction.customId.startsWith('confirm_purchase_')) {
+    await handleConfirmPurchase(interaction, user, services);
+  } else if (interaction.customId === 'cancel_purchase') {
+    await interaction.reply({
+      content: '❌ Achat annulé.',
+      ephemeral: true
+    });
+  }
+}
+
+async function handleConfirmPurchase(interaction: ButtonInteraction, user: any, services: Map<string, any>) {
+  const productId = interaction.customId.replace('confirm_purchase_', '');
+  const [category, itemType] = productId.split('_');
+  
+  const databaseService = services.get('database');
+
+  try {
+    let result: any;
+
+    switch (category) {
+      case 'machine':
+        const miningService = services.get('mining') as MiningService;
+        result = await miningService.purchaseMachine(user.id, itemType as MachineType);
+        break;
+      case 'attack':
+        result = await purchaseAttackCard(user.id, itemType as AttackType, databaseService);
+        break;
+      case 'defense':
+        result = await purchaseDefenseCard(user.id, itemType as DefenseType, databaseService);
+        break;
+      case 'fragment':
+        result = await purchaseFragment(user.id, itemType as FragmentType, databaseService);
+        break;
+      case 'consumable':
+        result = await purchaseConsumable(user.id, itemType, databaseService);
+        break;
+    }
+
+    if (result?.success) {
+      const successEmbed = new EmbedBuilder()
+        .setColor(0x27AE60)
+        .setTitle('🎉 Achat réussi!')
+        .setDescription(result.message)
+        .setFooter({ text: 'Bon jeu! 🎮' });
+
+      await interaction.update({
+        embeds: [successEmbed],
+        components: []
+      });
+    } else {
+      await interaction.update({
+        content: `❌ ${result?.message || 'Erreur lors de l\'achat.'}`,
+        embeds: [],
+        components: []
+      });
+    }
+
+  } catch (error) {
+    console.error('Error processing purchase:', error);
+    await interaction.update({
+      content: '❌ Une erreur est survenue lors de l\'achat. Veuillez réessayer.',
+      embeds: [],
+      components: []
+    });
+  }
+}
+
+async function purchaseAttackCard(userId: string, cardType: AttackType, databaseService: any): Promise<{success: boolean, message: string}> {
+  const cardInfo = attackCardInfo[cardType];
+  const price = cardInfo.price;
+
+  try {
+    await databaseService.client.$transaction(async (tx: any) => {
+      // Débite les tokens
+      await tx.user.update({
+        where: { id: userId },
+        data: { tokens: { decrement: price } }
+      });
+
+      // Ajoute la carte d'attaque
+      const existingCard = await tx.attackCard.findFirst({
+        where: { userId, type: cardType, rarity: CardRarity.COMMON }
+      });
+
+      if (existingCard) {
+        await tx.attackCard.update({
+          where: { id: existingCard.id },
+          data: { quantity: { increment: 1 } }
+        });
+      } else {
+        await tx.attackCard.create({
+          data: { userId, type: cardType, rarity: CardRarity.COMMON, quantity: 1 }
+        });
+      }
+
+      // Enregistre la transaction
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: TransactionType.BLACK_MARKET_PURCHASE,
+          amount: -price,
+          description: `Achat carte d'attaque: ${cardType}`
+        }
+      });
+    });
+
+    return {
+      success: true,
+      message: `🎉 Carte d'attaque **${cardInfo.name}** achetée avec succès!`
+    };
+
+  } catch (error) {
+    console.error('Error purchasing attack card:', error);
+    return {
+      success: false,
+      message: 'Erreur lors de l\'achat de la carte d\'attaque.'
+    };
+  }
+}
+
+async function purchaseDefenseCard(userId: string, cardType: DefenseType, databaseService: any): Promise<{success: boolean, message: string}> {
+  const cardInfo = defenseCardInfo[cardType];
+  const price = cardInfo.price;
+
+  try {
+    await databaseService.client.$transaction(async (tx: any) => {
+      // Débite les tokens
+      await tx.user.update({
+        where: { id: userId },
+        data: { tokens: { decrement: price } }
+      });
+
+      // Ajoute la carte de défense
+      const existingCard = await tx.defenseCard.findFirst({
+        where: { userId, type: cardType, rarity: CardRarity.COMMON }
+      });
+
+      if (existingCard) {
+        await tx.defenseCard.update({
+          where: { id: existingCard.id },
+          data: { quantity: { increment: 1 } }
+        });
+      } else {
+        await tx.defenseCard.create({
+          data: { userId, type: cardType, rarity: CardRarity.COMMON, quantity: 1 }
+        });
+      }
+
+      // Enregistre la transaction
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: TransactionType.BLACK_MARKET_PURCHASE,
+          amount: -price,
+          description: `Achat carte de défense: ${cardType}`
+        }
+      });
+    });
+
+    return {
+      success: true,
+      message: `🎉 Carte de défense **${cardInfo.name}** achetée avec succès!`
+    };
+
+  } catch (error) {
+    console.error('Error purchasing defense card:', error);
+    return {
+      success: false,
+      message: 'Erreur lors de l\'achat de la carte de défense.'
+    };
+  }
+}
+
+async function purchaseFragment(userId: string, fragmentType: FragmentType, databaseService: any): Promise<{success: boolean, message: string}> {
+  const fragmentInfo_local = fragmentInfo[fragmentType];
+  const price = fragmentInfo_local.price;
+
+  try {
+    await databaseService.client.$transaction(async (tx: any) => {
+      // Débite les tokens
+      await tx.user.update({
+        where: { id: userId },
+        data: { tokens: { decrement: price } }
+      });
+
+      // Ajoute les fragments
+      const existingFragment = await tx.cardFragment.findFirst({
+        where: { userId, type: fragmentType }
+      });
+
+      if (existingFragment) {
+        await tx.cardFragment.update({
+          where: { id: existingFragment.id },
+          data: { quantity: { increment: 1 } }
+        });
+      } else {
+        await tx.cardFragment.create({
+          data: { userId, type: fragmentType, quantity: 1 }
+        });
+      }
+
+      // Enregistre la transaction
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: TransactionType.BLACK_MARKET_PURCHASE,
+          amount: -price,
+          description: `Achat fragment: ${fragmentType}`
+        }
+      });
+    });
+
+    return {
+      success: true,
+      message: `🎉 Fragment **${fragmentInfo_local.name}** acheté avec succès!`
+    };
+
+  } catch (error) {
+    console.error('Error purchasing fragment:', error);
+    return {
+      success: false,
+      message: 'Erreur lors de l\'achat du fragment.'
+    };
+  }
+}
+
+async function purchaseConsumable(userId: string, consumableType: string, databaseService: any): Promise<{success: boolean, message: string}> {
+  const consumableInfo_local = consumableInfo[consumableType as keyof typeof consumableInfo];
+  const price = consumableInfo_local.price;
+
+  let effectMessage = '';
+  try {
+    await databaseService.client.$transaction(async (tx: any) => {
+      // Débite les tokens
+      await tx.user.update({
+        where: { id: userId },
+        data: { tokens: { decrement: price } }
+      });
+
+      // Applique l'effet du consommable immédiatement
+      let effectApplied = false;
+
+      switch (consumableType) {
+        case 'ENERGY_DRINK':
+          await tx.user.update({
+            where: { id: userId },
+            data: { energy: { increment: 25 } }
+          });
+          effectApplied = true;
+          effectMessage = '+25 énergie';
+          break;
+        
+        case 'MEGA_ENERGY':
+          await tx.user.update({
+            where: { id: userId },
+            data: { energy: { increment: 50 } }
+          });
+          effectApplied = true;
+          effectMessage = '+50 énergie';
+          break;
+        
+        // Pour les autres consommables, on pourrait ajouter des effets temporaires
+        // dans une table séparée ou des colonnes dédiées
+        default:
+          effectMessage = 'Effet temporaire activé';
+          break;
+      }
+
+      // S'assurer que l'énergie ne dépasse pas 100
+      await tx.user.updateMany({
+        where: { id: userId, energy: { gt: 100 } },
+        data: { energy: 100 }
+      });
+
+      // Enregistre la transaction
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: TransactionType.BLACK_MARKET_PURCHASE,
+          amount: -price,
+          description: `Achat consommable: ${consumableType}`
+        }
+      });
+    });
+
+    return {
+      success: true,
+      message: `🎉 **${consumableInfo_local.name}** utilisé avec succès! ${effectMessage ? `(${effectMessage})` : ''}`
+    };
+
+  } catch (error) {
+    console.error('Error purchasing consumable:', error);
+    return {
+      success: false,
+      message: 'Erreur lors de l\'achat du consommable.'
+    };
+  }
 }
