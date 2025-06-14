@@ -524,7 +524,7 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
 
     if (!battle) return;
 
-    let participants = battle.entries.map(entry => ({
+    let participants = battle.entries.map((entry: any) => ({
       id: entry.id,
       userId: entry.userId,
       username: entry.user.username,
@@ -535,10 +535,10 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
     let eventCount = 0;
     const maxEvents = 15 + Math.floor(Math.random() * 10); // 15-25 événements
 
-    while (participants.filter(p => !p.eliminated).length > 1 && eventCount < maxEvents) {
+    while (participants.filter((p: any) => !p.eliminated).length > 1 && eventCount < maxEvents) {
       await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 4000)); // 3-7 secondes
 
-      const alive = participants.filter(p => !p.eliminated);
+      const alive = participants.filter((p: any) => !p.eliminated);
       if (alive.length <= 1) break;
 
       const eventType = getRandomEventType();
@@ -546,7 +546,7 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
 
       if (eventType === 'combat') {
         const attacker = alive[Math.floor(Math.random() * alive.length)];
-        const targets = alive.filter(p => p.userId !== attacker.userId);
+        const targets = alive.filter((p: any) => p.userId !== attacker.userId);
         const defender = targets[Math.floor(Math.random() * targets.length)];
 
         const combatStyle = Math.random();
@@ -597,7 +597,7 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
     }
 
     // Annoncer le vainqueur
-    const winner = participants.find(p => !p.eliminated);
+    const winner = participants.find((p: any) => !p.eliminated);
     if (winner) {
       await new Promise(resolve => setTimeout(resolve, 5000));
 
