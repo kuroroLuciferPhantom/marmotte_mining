@@ -1,9 +1,27 @@
-import { SlashCommandBuilder, EmbedBuilder, CommandInteraction, UserResolvable } from 'discord.js';
-import { DatabaseService } from '../../services/database/DatabaseService';
-import { RedisService } from '../../services/cache/RedisService';
-import { BattleService } from '../../services/battle/BattleService';
+import { SlashCommandBuilder, EmbedBuilder, ChatInputCommandInteraction, TextChannel } from 'discord.js';
 import { logger } from '../../utils/logger';
-import { currentBattle } from '../admin/admin-battle';
+
+// Import du currentBattle depuis admin-battle (on va corriger l'export)
+// Pour l'instant on le déclare ici temporairement
+let currentBattle: {
+  id: string;
+  channelId: string;
+  messageId: string;
+  maxPlayers: number;
+  registrationEndTime: Date;
+  status: 'registration' | 'starting' | 'active' | 'finished';
+  participants: string[];
+} | null = null;
+
+// Fonction pour accéder au currentBattle depuis admin-battle
+function getCurrentBattle() {
+  try {
+    const adminBattle = require('../admin/admin-battle');
+    return adminBattle.currentBattle || null;
+  } catch {
+    return currentBattle;
+  }
+}
 
 export const data = new SlashCommandBuilder()
   .setName('battle')
@@ -25,23 +43,26 @@ export const data = new SlashCommandBuilder()
       .setName('leaderboard')
       .setDescription('👑 Classement des meilleurs miners'));
 
-export async function execute(interaction: CommandInteraction) {
+export async function execute(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   try {
     const subcommand = interaction.options.getSubcommand();
-    const databaseService = new DatabaseService();
-    const redisService = new RedisService();
-    const battleService = new BattleService(databaseService, redisService);
+    const databaseService = services.get('database');
+    const cacheService = services.get('cache');
 
-    // Vérification de l'utilisateur en base
-    await databaseService.ensureUserExists(interaction.user.id, interaction.user.username);
+    if (!databaseService) {
+      throw new Error('Database service not available');
+    }
+
+    // Vérification de l'utilisateur en base (version adaptée)
+    await ensureUserExists(databaseService, interaction.user.id, interaction.user.username);
 
     switch (subcommand) {
       case 'join':
-        await handleJoinBattle(interaction, battleService);
+        await handleJoinBattle(interaction, databaseService, cacheService);
         break;
       
       case 'status':
-        await handleBattleStatus(interaction, battleService);
+        await handleBattleStatus(interaction, databaseService);
         break;
       
       case 'stats':
@@ -80,8 +101,36 @@ export async function execute(interaction: CommandInteraction) {
   }
 }
 
-async function handleJoinBattle(interaction: CommandInteraction, battleService: BattleService) {
+// Fonction adaptée pour créer/vérifier l'utilisateur
+async function ensureUserExists(databaseService: any, discordId: string, username: string) {
+  try {
+    let user = await databaseService.client.user.findUnique({
+      where: { discordId }
+    });
+
+    if (!user) {
+      user = await databaseService.client.user.create({
+        data: {
+          discordId,
+          username,
+          tokens: 100.0,
+          dollars: 0.0
+        }
+      });
+      logger.info(`Created new user: ${username} (${discordId})`);
+    }
+
+    return user;
+  } catch (error) {
+    logger.error('Error ensuring user exists:', error);
+    throw error;
+  }
+}
+
+async function handleJoinBattle(interaction: ChatInputCommandInteraction, databaseService: any, cacheService: any) {
   await interaction.deferReply();
+
+  const currentBattle = getCurrentBattle();
 
   // Vérifier s'il y a une bataille en cours
   if (!currentBattle || currentBattle.status !== 'registration') {
@@ -117,6 +166,10 @@ ${!currentBattle ?
     });
     return;
   }
+
+  // Créer le BattleService dynamiquement
+  const { BattleService } = await import('../../services/battle/BattleService');
+  const battleService = new BattleService(databaseService, cacheService);
 
   // Rejoindre la bataille
   const result = await battleService.joinBattle(interaction.user.id, currentBattle.id);
@@ -229,8 +282,8 @@ ${result.message}
 
   // Mettre à jour le message principal dans le canal
   try {
-    const channel = await interaction.client.channels.fetch(currentBattle.channelId);
-    if (channel?.isTextBased()) {
+    const channel = await interaction.client.channels.fetch(currentBattle.channelId) as TextChannel;
+    if (channel && channel.isTextBased()) {
       const message = await channel.messages.fetch(currentBattle.messageId);
       
       // Mettre à jour l'embed principal
@@ -273,8 +326,10 @@ ${result.message}
   logger.info(`User ${interaction.user.id} joined battle ${currentBattle.id}`);
 }
 
-async function handleBattleStatus(interaction: CommandInteraction, battleService: BattleService) {
+async function handleBattleStatus(interaction: ChatInputCommandInteraction, databaseService: any) {
   await interaction.deferReply();
+
+  const currentBattle = getCurrentBattle();
 
   if (!currentBattle) {
     const noActiveEmbed = new EmbedBuilder()
@@ -371,7 +426,7 @@ Le réseau de bataille est actuellement en veille.
   if (currentBattle.participants.length > 0 && currentBattle.participants.length <= 10) {
     try {
       const participantNames = await Promise.all(
-        currentBattle.participants.map(async (userId: UserResolvable) => {
+        currentBattle.participants.map(async (userId: string) => {
           try {
             const user = await interaction.client.users.fetch(userId);
             return `• ${user.username}`;
@@ -394,7 +449,7 @@ Le réseau de bataille est actuellement en veille.
   await interaction.editReply({ embeds: [embed] });
 }
 
-async function handleUserStats(interaction: CommandInteraction, databaseService: DatabaseService) {
+async function handleUserStats(interaction: ChatInputCommandInteraction, databaseService: any) {
   await interaction.deferReply();
 
   try {
@@ -416,8 +471,8 @@ async function handleUserStats(interaction: CommandInteraction, databaseService:
 
     // Calcul des statistiques
     const totalBattles = user.battleEntries.length;
-    const wins = user.battleEntries.filter(entry => entry.position === 1).length;
-    const top3 = user.battleEntries.filter(entry => entry.position && entry.position <= 3).length;
+    const wins = user.battleEntries.filter((entry: any) => entry.position === 1).length;
+    const top3 = user.battleEntries.filter((entry: any) => entry.position && entry.position <= 3).length;
     const winRate = totalBattles > 0 ? ((wins / totalBattles) * 100).toFixed(1) : '0';
     const top3Rate = totalBattles > 0 ? ((top3 / totalBattles) * 100).toFixed(1) : '0';
 
@@ -483,7 +538,7 @@ async function handleUserStats(interaction: CommandInteraction, databaseService:
 
     // Historique récent
     if (user.battleEntries.length > 0) {
-      const recentBattles = user.battleEntries.slice(0, 5).map(entry => {
+      const recentBattles = user.battleEntries.slice(0, 5).map((entry: any) => {
         const positionEmoji = entry.position === 1 ? '🥇' : 
                              entry.position === 2 ? '🥈' : 
                              entry.position === 3 ? '🥉' : 
@@ -501,7 +556,7 @@ async function handleUserStats(interaction: CommandInteraction, databaseService:
     }
 
     // Messages motivationnels personnalisés
-    const motivationalMessages = {
+    const motivationalMessages: Record<string, string[]> = {
       'noob': [
         "💪 Every master was once a disaster !",
         "🎯 Practice makes perfect, keep grinding !",
@@ -542,7 +597,7 @@ async function handleUserStats(interaction: CommandInteraction, databaseService:
   }
 }
 
-async function handleLeaderboard(interaction: CommandInteraction, databaseService: DatabaseService) {
+async function handleLeaderboard(interaction: ChatInputCommandInteraction, databaseService: any) {
   await interaction.deferReply();
 
   try {
@@ -558,14 +613,14 @@ async function handleLeaderboard(interaction: CommandInteraction, databaseServic
     });
 
     // Calcul et tri des statistiques
-    const leaderboardData = topWarriors.map(user => {
+    const leaderboardData = topWarriors.map((user: any) => {
       const battles = user.battleEntries;
       const totalBattles = battles.length;
-      const wins = battles.filter(b => b.position === 1).length;
-      const top3 = battles.filter(b => b.position! <= 3).length;
+      const wins = battles.filter((b: any) => b.position === 1).length;
+      const top3 = battles.filter((b: any) => b.position! <= 3).length;
       const totalRewards = battles
-        .filter(b => b.position! <= 3)
-        .reduce((sum, battle) => {
+        .filter((b: any) => b.position! <= 3)
+        .reduce((sum: number, battle: any) => {
           const position = battle.position!;
           if (position === 1) return sum + (battle.battle.prizePool * 0.5);
           if (position === 2) return sum + (battle.battle.prizePool * 0.25);
@@ -585,8 +640,8 @@ async function handleLeaderboard(interaction: CommandInteraction, databaseServic
         score: wins * 100 + top3 * 25 + totalBattles * 5 // Score composite
       };
     })
-    .filter(user => user.totalBattles > 0)
-    .sort((a, b) => {
+    .filter((user: any) => user.totalBattles > 0)
+    .sort((a: any, b: any) => {
       // Tri par victoires d'abord, puis par score composite
       if (b.wins !== a.wins) return b.wins - a.wins;
       return b.score - a.score;
@@ -610,7 +665,7 @@ async function handleLeaderboard(interaction: CommandInteraction, databaseServic
       .setDescription('**The greatest warriors of the digital battlefield !**')
       .setTimestamp();
 
-    const leaderboardText = leaderboardData.map((warrior, index) => {
+    const leaderboardText = leaderboardData.map((warrior: any, index: number) => {
       const rankEmoji = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
       const winRateStr = warrior.winRate.toFixed(1);
       
@@ -626,8 +681,8 @@ async function handleLeaderboard(interaction: CommandInteraction, databaseServic
     }]);
 
     // Stats globales
-    const totalBattlesGlobal = leaderboardData.reduce((sum, w) => sum + w.totalBattles, 0);
-    const totalRewardsDistributed = leaderboardData.reduce((sum, w) => sum + w.totalRewards, 0);
+    const totalBattlesGlobal = leaderboardData.reduce((sum: number, w: any) => sum + w.totalBattles, 0);
+    const totalRewardsDistributed = leaderboardData.reduce((sum: number, w: any) => sum + w.totalRewards, 0);
 
     embed.addFields([{
       name: '📈 Global Statistics',
@@ -636,7 +691,7 @@ async function handleLeaderboard(interaction: CommandInteraction, databaseServic
     }]);
 
     // Position de l'utilisateur actuel
-    const userPosition = leaderboardData.findIndex(w => w.discordId === interaction.user.id);
+    const userPosition = leaderboardData.findIndex((w: any) => w.discordId === interaction.user.id);
     if (userPosition !== -1) {
       const userData = leaderboardData[userPosition];
       embed.addFields([{
