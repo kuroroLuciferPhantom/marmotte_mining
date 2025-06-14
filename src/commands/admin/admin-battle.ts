@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, CommandInteraction, PermissionFlagsBits, TextChannel } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, CommandInteraction, PermissionFlagsBits, TextChannel, ButtonBuilder, ActionRowBuilder, ButtonStyle } from 'discord.js';
 import { DatabaseService } from '../../services/database/DatabaseService';
 import { RedisService } from '../../services/cache/RedisService';
 import { BattleService } from '../../services/battle/BattleService';
@@ -6,191 +6,122 @@ import { logger } from '../../utils/logger';
 
 export const data = new SlashCommandBuilder()
   .setName('admin-battle')
-  .setDescription('🎯 Commandes d\'administration pour les batailles royales épiques!')
+  .setDescription('⚔️ Commandes d\'administration pour les batailles de mining')
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addSubcommand(subcommand =>
     subcommand
       .setName('start')
-      .setDescription('🚀 Lance une nouvelle bataille royale avec un thème épique!')
+      .setDescription('🚀 Lance une nouvelle bataille royale de mining')
       .addIntegerOption(option =>
         option.setName('max-joueurs')
           .setDescription('Nombre maximum de participants (2-20)')
-          .setRequired(false)
+          .setRequired(true)
           .setMinValue(2)
           .setMaxValue(20))
-      .addStringOption(option =>
-        option.setName('theme')
-          .setDescription('Thème de la bataille pour le roleplay')
-          .setRequired(false)
-          .addChoices(
-            { name: '⚔️ Gladiateurs du Mining', value: 'gladiator' },
-            { name: '🏴‍☠️ Pirates des 7 Blockchains', value: 'pirate' },
-            { name: '🤖 Guerre des Robots Mineurs', value: 'robot' },
-            { name: '🧙‍♂️ Sorciers du Hash', value: 'wizard' },
-            { name: '🦄 Licornes Cryptographiques', value: 'unicorn' },
-            { name: '🐸 Grenouilles de la Degen Pool', value: 'frog' },
-            { name: '🔥 Dragons du Token Burn', value: 'dragon' },
-            { name: '🚀 Astronautes vers la Lune', value: 'moon' }
-          )))
+      .addIntegerOption(option =>
+        option.setName('temps-inscription')
+          .setDescription('Temps d\'inscription en minutes (1-30)')
+          .setRequired(true)
+          .setMinValue(1)
+          .setMaxValue(30)))
   .addSubcommand(subcommand =>
     subcommand
       .setName('force-end')
-      .setDescription('🛑 Force la fin d\'une bataille en cours')
-      .addStringOption(option =>
-        option.setName('battle-id')
-          .setDescription('ID de la bataille à terminer')
-          .setRequired(true)))
+      .setDescription('🛑 Force la fin de la bataille en cours'))
   .addSubcommand(subcommand =>
     subcommand
-      .setName('set-moderator')
-      .setDescription('👑 Nomme un modérateur de bataille')
-      .addUserOption(option =>
-        option.setName('user')
-          .setDescription('Utilisateur à nommer modérateur')
-          .setRequired(true)))
-  .addSubcommand(subcommand =>
-    subcommand
-      .setName('remove-moderator')
-      .setDescription('👑 Retire les droits de modérateur')
-      .addUserOption(option =>
-        option.setName('user')
-          .setDescription('Utilisateur à qui retirer les droits')
-          .setRequired(true)))
-  .addSubcommand(subcommand =>
-    subcommand
-      .setName('stats')
-      .setDescription('📊 Statistiques complètes des batailles'))
-  .addSubcommand(subcommand =>
-    subcommand
-      .setName('cleanup')
-      .setDescription('🧹 Nettoie les anciennes batailles'));
+      .setName('status')
+      .setDescription('📊 Statut de la bataille actuelle'));
 
-// Interface pour les thèmes de bataille
-interface BattleTheme {
-  name: string;
-  emoji: string;
-  startMessage: string;
-  winMessage: string;
-  loseMessage: string;
-  arena: string;
-  commentary: string[];
-}
+// Événements de bataille thématiques mining/crypto/hack
+const MINING_BATTLE_EVENTS = {
+  // Événements d'entrée
+  entry: [
+    "🔌 {username} branche ses rigs et rejoint la ferme de mining !",
+    "💻 {username} hack son chemin dans le réseau de la bataille !",
+    "⚡ {username} overclocke ses GPUs et entre dans l'arène !",
+    "🌐 {username} se connecte au pool de bataille avec un ping parfait !",
+    "🔧 {username} configure ses ASICs pour la guerre totale !",
+    "💾 {username} télécharge les scripts de combat... 100% complete !",
+    "🎯 {username} scan le réseau et trouve une faille pour entrer !",
+    "🚀 {username} déploie ses bots de mining dans la bataille !"
+  ],
 
-// Thèmes de bataille avec roleplay
-const BATTLE_THEMES: Record<string, BattleTheme> = {
-  gladiator: {
-    name: "Gladiateurs du Mining",
-    emoji: "⚔️",
-    startMessage: "Les grilles du Colisée s'ouvrent ! Que les hash rates les plus puissants gagnent !",
-    winMessage: "triomphe dans l'arène ! La foule en délire crie son nom !",
-    loseMessage: "tombe face contre terre, ses miners fumant de défaite...",
-    arena: "🏛️ **Colisée du Hash** - Les gradins résonnent de cris de guerre !",
-    commentary: [
-      "💥 Un coup de hash dévastateur !",
-      "🛡️ Parade magistrale avec un antivirus !",
-      "⚡ Overclocking critique ! Les machines surchauffent !",
-      "🔥 Combo ravageur ! Mining pool en fusion !"
-    ]
-  },
-  pirate: {
-    name: "Pirates des 7 Blockchains",
-    emoji: "🏴‍☠️",
-    startMessage: "Hissez les voiles moussaillons ! La chasse au trésor commence !",
-    winMessage: "accoste avec un butin légendaire ! Yo ho ho et une bouteille de tokens !",
-    loseMessage: "coule dans les abysses, ses bitcoins perdus à jamais...",
-    arena: "🏴‍☠️ **Océan Décentralisé** - Les vagues de volatilité font rage !",
-    commentary: [
-      "🏴‍☠️ Abordage ! Vol de hash power !",
-      "⚓ Ancrage solide sur la blockchain !",
-      "🌊 Tempête de sell orders ! Tous aux canots !",
-      "💎 Trésor découvert ! Pump inattendu !"
-    ]
-  },
-  robot: {
-    name: "Guerre des Robots Mineurs",
-    emoji: "🤖",
-    startMessage: "INITIALISATION... BATAILLE.EXE LANCÉ ! EXTERMINER LA CONCURRENCE !",
-    winMessage: "domine le champ de bataille ! VICTOIRE.EXE COMPLETÉ !",
-    loseMessage: "subit un dysfonctionnement critique... ERREUR 404: TOKENS NOT FOUND",
-    arena: "🤖 **Usine Cybernétique** - Étincelles et vapeur métallique !",
-    commentary: [
-      "⚡ OVERCLOCKING DETECTED ! TEMPÉRATURE CRITIQUE !",
-      "🔧 RÉPARATION D'URGENCE ! NANOBOTS DÉPLOYÉS !",
-      "💾 HACK SUCCESSFUL ! DONNÉES CORROMPUES !",
-      "🚨 SYSTÈME EN SURCHAUFFE ! COOLANT NÉCESSAIRE !"
-    ]
-  },
-  wizard: {
-    name: "Sorciers du Hash",
-    emoji: "🧙‍♂️",
-    startMessage: "Par les barbes de Satoshi ! Que la magie du mining commence !",
-    winMessage: "brandit sa baguette mining victorieuse ! Un sort de richesse l'enveloppe !",
-    loseMessage: "voit sa magie se retourner contre lui... Ses sorts ont échoué !",
-    arena: "🏰 **Tour des Algorithmes** - Cristaux magiques et runes brillantes !",
-    commentary: [
-      "✨ Sort de multiplication ! Les tokens pleuvent !",
-      "🔮 Vision prophétique ! Bull run prédit !",
-      "⚡ Éclair de hash ! Dégâts magiques massifs !",
-      "🧪 Potion de boost ! Efficacité doublée !"
-    ]
-  },
-  unicorn: {
-    name: "Licornes Cryptographiques",
-    emoji: "🦄",
-    startMessage: "Dans un nuage d'arc-en-ciel et de paillettes, les licornes s'affrontent !",
-    winMessage: "galope vers la victoire sur un arc-en-ciel de profits ! Magical !",
-    loseMessage: "perd sa corne magique... Plus jamais de tokens rainbow...",
-    arena: "🌈 **Vallée Enchantée** - Paillettes de stardust et mining pools dorés !",
-    commentary: [
-      "🌟 Corne magique ! Perçage de résistance !",
-      "🌈 Rainbow bridge ! Connexion interdimensionnelle !",
-      "✨ Paillettes toxiques ! Aveuglement temporaire !",
-      "🦄 Charge fantastique ! Dégâts purs et magiques !"
-    ]
-  },
-  frog: {
-    name: "Grenouilles de la Degen Pool",
-    emoji: "🐸",
-    startMessage: "REEEEEEE ! Les grenouilles sortent du marais pour un combat légendaire !",
-    winMessage: "fait un pump épique ! WAGMI mon pote ! 🚀",
-    loseMessage: "croak tristement... Rugged par la life... F dans le chat",
-    arena: "🐸 **Marais DeFi** - Bulles de gaz fee et nénuphars yield farming !",
-    commentary: [
-      "🐸 REEEEE ! Cri de guerre degen !",
-      "💎 DIAMOND HANDS ! Hodl jusqu'au bout !",
-      "📈 PUMP IT ! To the moon baby !",
-      "💀 RUG PULL ! Tout le monde court !"
-    ]
-  },
-  dragon: {
-    name: "Dragons du Token Burn",
-    emoji: "🔥",
-    startMessage: "Les dragons ouvrent leurs gueules ! Place au brasier purificateur !",
-    winMessage: "domine de ses flammes ! Ses ennemis ne sont plus que cendres !",
-    loseMessage: "s'éteint lentement... Ses dernières braises disparaissent...",
-    arena: "🌋 **Volcan des Burns** - Lave incandescente et fumée de tokens !",
-    commentary: [
-      "🔥 BURN MASSIF ! L'offre diminue !",
-      "🐉 Souffle de dragon ! Incinération totale !",
-      "🌋 Éruption volcanique ! Chaos sur le marché !",
-      "💀 Cendres à cendres, tokens à tokens..."
-    ]
-  },
-  moon: {
-    name: "Astronautes vers la Lune",
-    emoji: "🚀",
-    startMessage: "3... 2... 1... DÉCOLLAGE ! Direction : Alpha Centauri !",
-    winMessage: "plante le drapeau sur la lune ! Houston, nous avons un millionnaire !",
-    loseMessage: "s'écrase au décollage... Mission aborted, repeat, mission aborted !",
-    arena: "🚀 **Rampe de Lancement** - Fumée de propulseur et étoiles brillantes !",
-    commentary: [
-      "🚀 IGNITION ! Propulsion au maximum !",
-      "🌙 MOON LANDING ! Objectif atteint !",
-      "💥 EXPLOSION ! Échec critique du lancement !",
-      "👨‍🚀 Contact perdu ! Astronaute à la dérive !"
-    ]
-  }
+  // Événements de combat sérieux
+  combat_serious: [
+    "💥 {attacker} lance une attaque DDoS massive sur les serveurs de {defender} !",
+    "⚡ {attacker} redirige toute la puissance de calcul vers {defender} et surcharge ses circuits !",
+    "🎯 {attacker} exploite une faille zero-day dans les machines de {defender} !",
+    "💾 {attacker} injecte un malware qui détourne les hashrates de {defender} !",
+    "🔥 {attacker} déclenche un fork hostile de la blockchain de {defender} !",
+    "🌪️ {attacker} effectue un double-spend attack contre {defender} !",
+    "💀 {attacker} active un botnet qui spam les transactions de {defender} !",
+    "⚒️ {attacker} monopolise la pool de mining, laissant {defender} sans récompenses !"
+  ],
+
+  // Événements drôles
+  combat_funny: [
+    "🤡 {attacker} envoie 10 000 NFTs de singes à {defender} qui plante sous le spam !",
+    "🍕 {attacker} commande 50 pizzas chez {defender}, qui abandonne tout pour manger !",
+    "😴 {defender} s'endort devant ses écrans... {attacker} en profite pour débrancher tout !",
+    "🐱 Le chat de {defender} marche sur le clavier et delete tous ses wallets !",
+    "☕ {defender} renverse son café sur ses rigs... Court-circuit catastrophique !",
+    "📱 {attacker} rickroll {defender} avec 999 notifications, qui crash mentalement !",
+    "🦆 {attacker} remplace tous les sons système de {defender} par des canards... Efficiency -100% !",
+    "🎮 {defender} rage quit après avoir perdu 0.0001 BTC au pump and dump de {attacker} !"
+  ],
+
+  // Événements bizarres/wtf
+  combat_weird: [
+    "👽 Des aliens hackent les machines de {defender} pour télécharger TikTok !",
+    "🔮 {attacker} utilise l'IA de ChatGPT pour prédire les mouvements de {defender} !",
+    "🌙 La lune influence mystérieusement les GPUs de {defender} qui minent à l'envers !",
+    "🦾 {attacker} développe une IA consciente qui se rebelle et mine pour elle-même !",
+    "🕳️ Un trou noir quantique avale 50% des tokens de {defender} !",
+    "🤖 Les machines de {defender} prennent conscience et demandent un salaire !",
+    "📡 {attacker} contacte Elon Musk qui tweet contre {defender}, crash immédiat !",
+    "🎭 {defender} découvre que toute sa fortune était en shitcoins... Dépression existentielle !",
+    "🌊 Une vague de liquidations en cascade emporte {defender} vers l'abîme !",
+    "🔬 {attacker} invente la fusion froide, rendant obsolètes tous les rigs de {defender} !"
+  ],
+
+  // Éliminations
+  elimination: [
+    "💔 {username} voit ses derniers satoshis s'évaporer dans le mempool...",
+    "😵 Les machines de {username} explosent dans un nuage de fumée bleue !",
+    "💸 {username} regarde impuissant ses positions se liquider une par une...",
+    "🪦 {username} rejoint le cimetière des portefeuilles rekt...",
+    "😭 {username} hurle 'HODL!' mais il est déjà trop tard...",
+    "💀 {username} est banni du réseau pour activité suspecte...",
+    "🌪️ {username} est emporté par une tempête de volatilité...",
+    "🔥 Les serveurs de {username} partent en fumée, game over !",
+    "⚡ Coupure de courant chez {username}, tous ses efforts réduits à néant !",
+    "💻 Écran bleu de la mort pour {username}, Windows a encore frappé !"
+  ],
+
+  // Messages de victoire
+  victory: [
+    "🏆 {username} domine la blockchain ! Nouveau whale confirmé !",
+    "👑 {username} devient le maître suprême du mining ! All hail the king !",
+    "🌟 {username} atteint le consensus ultime ! Legendary performance !",
+    "⚡ {username} contrôle désormais 51% du réseau ! Power overwhelming !",
+    "🔥 {username} forge la genèse d'une nouvelle ère ! Epic victory !",
+    "💎 {username} a les mains de diamant les plus pures ! Diamond hands supreme !",
+    "🚀 {username} pump sa victoire to the moon ! Gains gravitationnels !",
+    "🎯 {username} a cracké le code de la richesse ! Algorithm mastered !"
+  ]
 };
+
+// État global de la bataille (une seule à la fois)
+export let currentBattle: {
+  id: string;
+  channelId: string;
+  messageId: string;
+  maxPlayers: number;
+  registrationEndTime: Date;
+  status: 'registration' | 'starting' | 'active' | 'finished';
+  participants: string[];
+} | null = null;
 
 export async function execute(interaction: CommandInteraction) {
   try {
@@ -210,20 +141,8 @@ export async function execute(interaction: CommandInteraction) {
         await handleForceEnd(interaction, battleService);
         break;
       
-      case 'set-moderator':
-        await handleSetModerator(interaction, databaseService);
-        break;
-      
-      case 'remove-moderator':
-        await handleRemoveModerator(interaction, databaseService);
-        break;
-      
-      case 'stats':
-        await handleBattleStats(interaction, battleService);
-        break;
-      
-      case 'cleanup':
-        await handleCleanup(interaction, battleService);
+      case 'status':
+        await handleStatus(interaction);
         break;
       
       default:
@@ -235,8 +154,8 @@ export async function execute(interaction: CommandInteraction) {
     
     const errorEmbed = new EmbedBuilder()
       .setColor(0xff0000)
-      .setTitle('💥 Erreur Critique !')
-      .setDescription('Houston, nous avons un problème ! Une erreur est survenue.')
+      .setTitle('💥 Erreur Système !')
+      .setDescription('Stack overflow dans le système de bataille !')
       .setTimestamp();
 
     await interaction.editReply({ embeds: [errorEmbed] });
@@ -244,9 +163,14 @@ export async function execute(interaction: CommandInteraction) {
 }
 
 async function handleStartBattle(interaction: CommandInteraction, battleService: BattleService) {
-  const maxPlayers = interaction.options.get('max-joueurs')?.value as number || 10;
-  const themeKey = interaction.options.get('theme')?.value as string || 'gladiator';
-  const theme = BATTLE_THEMES[themeKey];
+  // Vérifier qu'il n'y a pas déjà une bataille
+  if (currentBattle && currentBattle.status !== 'finished') {
+    await interaction.editReply('❌ Une bataille est déjà en cours ! Utilisez `/admin-battle force-end` pour la terminer.');
+    return;
+  }
+
+  const maxPlayers = interaction.options.get('max-joueurs')?.value as number;
+  const registrationTime = interaction.options.get('temps-inscription')?.value as number;
   
   const result = await battleService.createBattle(maxPlayers);
   
@@ -255,63 +179,96 @@ async function handleStartBattle(interaction: CommandInteraction, battleService:
     return;
   }
 
-  // Annonce publique de la bataille
+  const registrationEndTime = new Date(Date.now() + registrationTime * 60 * 1000);
+  
+  // Créer l'annonce publique
   const channel = interaction.channel as TextChannel;
   
   const announceEmbed = new EmbedBuilder()
-    .setTitle(`${theme.emoji} ${theme.name.toUpperCase()} ${theme.emoji}`)
+    .setTitle('⚔️ BATAILLE ROYALE DE MINING ⚔️')
     .setColor(0xff6600)
     .setDescription(`
-**🎭 BATAILLE ROYALE COMMENCE !**
+**🎯 LA GUERRE DES HASHRATES COMMENCE !**
 
-${theme.startMessage}
+Dans cette arène digitale impitoyable, seul le mineur le plus malin survivra ! 
+Préparez vos rigs, sharpen vos algos, et que le meilleur geek gagne !
 
-${theme.arena}
+**💻 RÈGLES DU JEU :**
+• **${maxPlayers} slots disponibles** - First come, first served !
+• **Frais d'entrée :** Votre niveau × 5 tokens (min. 10)
+• **Rewards :** 50% au winner, 25% au runner-up, 15% au 3ème
 
-**💰 Règles de la fortune :**
-• Frais d'entrée : Votre niveau × 5 tokens (minimum 10)
-• Récompenses : 50% pour le 1er, 25% pour le 2e, 15% pour le 3e
-• Places limitées : **${maxPlayers} guerriers maximum**
-• Combat automatique dans 2-5 minutes une fois plein !
-
-**🎮 Pour participer :** \`/battle join\`
+**⏰ INSCRIPTION LIMITÉE :**
+Vous avez **${registrationTime} minutes** pour rejoindre !
+Cliquez sur le bouton ci-dessous pour enter the matrix !
     `)
     .addFields([
       {
-        name: '🏆 Cagnotte Progressive',
-        value: 'Augmente à chaque participant !',
-        inline: true
-      },
-      {
-        name: '⚡ Status',
-        value: '🟢 Inscriptions ouvertes',
+        name: '🏆 Prize Pool',
+        value: '0 tokens (augmente avec chaque participant)',
         inline: true
       },
       {
         name: '👥 Participants',
         value: `0 / ${maxPlayers}`,
         inline: true
+      },
+      {
+        name: '⏳ Fin des inscriptions',
+        value: `<t:${Math.floor(registrationEndTime.getTime() / 1000)}:R>`,
+        inline: true
       }
     ])
-    .setImage('https://media.giphy.com/media/l0HlFZ3c4NENSLQRi/giphy.gif') // GIF epic battle
-    .setFooter({ 
-      text: `Battle ID: ${result.battleId} | Lancée par ${interaction.user.username}` 
-    })
+    .setImage('https://media.giphy.com/media/26tn33aiTi1jkl6H6/giphy.gif')
+    .setFooter({ text: `Battle ID: ${result.battleId.slice(0, 8)}... | Lancée par ${interaction.user.username}` })
     .setTimestamp();
 
-  await channel.send({ 
+  // Bouton de participation
+  const joinButton = new ButtonBuilder()
+    .setCustomId(`join_battle_${result.battleId}`)
+    .setLabel('🔥 ENTER THE MATRIX')
+    .setStyle(ButtonStyle.Primary)
+    .setEmoji('⚔️');
+
+  const infoButton = new ButtonBuilder()
+    .setCustomId(`info_battle_${result.battleId}`)
+    .setLabel('📊 Battle Info')
+    .setStyle(ButtonStyle.Secondary)
+    .setEmoji('💻');
+
+  const row = new ActionRowBuilder<ButtonBuilder>()
+    .addComponents(joinButton, infoButton);
+
+  const message = await channel.send({ 
     embeds: [announceEmbed],
-    content: '@everyone 🎯 **BATAILLE ROYALE ÉPIQUE** ! Qui sera le dernier debout ? 🏆'
+    components: [row],
+    content: '@everyone 🚨 **CYBER WAR ALERT** 🚨 Une nouvelle bataille de mining commence ! Qui sera le dernier miner debout ?'
   });
 
-  // Confirmation privée pour l'admin
+  // Stocker l'état de la bataille
+  currentBattle = {
+    id: result.battleId,
+    channelId: channel.id,
+    messageId: message.id,
+    maxPlayers,
+    registrationEndTime,
+    status: 'registration',
+    participants: []
+  };
+
+  // Programmer la fin des inscriptions
+  setTimeout(async () => {
+    await endRegistrationAndStartBattle(battleService);
+  }, registrationTime * 60 * 1000);
+
+  // Confirmation pour l'admin
   const confirmEmbed = new EmbedBuilder()
-    .setTitle('✅ Bataille Royale Lancée !')
+    .setTitle('✅ Bataille Lancée !')
     .setColor(0x00ff00)
     .setDescription(`
-**Bataille ID :** \`${result.battleId}\`
-**Thème :** ${theme.name}
+**Battle ID :** \`${result.battleId}\`
 **Participants max :** ${maxPlayers}
+**Temps d'inscription :** ${registrationTime} minutes
 **Status :** En attente de participants
 
 La bataille a été annoncée publiquement !
@@ -320,196 +277,336 @@ La bataille a été annoncée publiquement !
 
   await interaction.editReply({ embeds: [confirmEmbed] });
   
-  logger.info(`Admin ${interaction.user.id} started battle ${result.battleId} with theme ${themeKey}`);
+  logger.info(`Admin ${interaction.user.id} started battle ${result.battleId}`);
 }
 
 async function handleForceEnd(interaction: CommandInteraction, battleService: BattleService) {
-  const battleId = interaction.options.get('battle-id')?.value as string;
-  
-  const battleInfo = await battleService.getBattleInfo(battleId);
-  
-  if (!battleInfo) {
-    await interaction.editReply('❌ Bataille non trouvée !');
+  if (!currentBattle) {
+    await interaction.editReply('❌ Aucune bataille en cours !');
     return;
   }
 
-  if (battleInfo.status === 'FINISHED') {
-    await interaction.editReply('❌ Cette bataille est déjà terminée !');
-    return;
+  const result = await battleService.cancelBattle(currentBattle.id);
+  
+  // Mettre à jour le message d'annonce
+  try {
+    const channel = await interaction.client.channels.fetch(currentBattle.channelId) as TextChannel;
+    const message = await channel.messages.fetch(currentBattle.messageId);
+    
+    const cancelledEmbed = new EmbedBuilder()
+      .setTitle('🛑 BATAILLE ANNULÉE')
+      .setColor(0xff0000)
+      .setDescription(`
+**La bataille a été interrompue par un admin !**
+
+${result.success ? '✅ Tous les participants ont été remboursés.' : '❌ Erreur lors du remboursement.'}
+
+*"Sometimes the only winning move is not to play..." - WarGames*
+      `)
+      .setTimestamp();
+
+    await message.edit({ embeds: [cancelledEmbed], components: [] });
+  } catch (error) {
+    logger.error('Error updating cancelled battle message:', error);
   }
 
-  // Force la fin via la méthode private (on doit l'exposer)
-  const result = await battleService.cancelBattle(battleId);
+  currentBattle = null;
   
   const embed = new EmbedBuilder()
-    .setTitle('🛑 Bataille Forcée à Terminer')
+    .setTitle('🛑 Bataille Terminée')
     .setColor(0xff0000)
     .setDescription(`
-**Bataille ID :** \`${battleId}\`
-**Action :** ${result.success ? 'Bataille terminée et participants remboursés' : 'Échec'}
-**Raison :** Intervention administrative
+**Action :** Bataille forcée à terminer
+**Résultat :** ${result.success ? 'Participants remboursés' : 'Échec'}
 
-${result.success ? '✅' : '❌'} ${result.message}
+${result.message}
     `)
     .setTimestamp();
 
   await interaction.editReply({ embeds: [embed] });
   
-  logger.info(`Admin ${interaction.user.id} force-ended battle ${battleId}`);
+  logger.info(`Admin ${interaction.user.id} force-ended current battle`);
 }
 
-async function handleSetModerator(interaction: CommandInteraction, databaseService: DatabaseService) {
-  const targetUser = interaction.options.get('user')?.user;
-  
-  if (!targetUser) {
-    await interaction.editReply('❌ Utilisateur non trouvé !');
+async function handleStatus(interaction: CommandInteraction) {
+  if (!currentBattle) {
+    await interaction.editReply('📭 Aucune bataille en cours actuellement.');
     return;
   }
 
-  // Stockage simple dans cache Redis pour les modérateurs (ou en DB si préféré)
-  // Pour simplifier, on utilise un système de cache
-  const redisService = new RedisService();
-  await redisService.hSet('battle:moderators', targetUser.id, 'true');
-  
+  const timeLeft = currentBattle.registrationEndTime.getTime() - Date.now();
+  const minutesLeft = Math.max(0, Math.floor(timeLeft / 1000 / 60));
+
   const embed = new EmbedBuilder()
-    .setTitle('👑 Nouveau Modérateur de Bataille !')
-    .setColor(0xffd700)
-    .setDescription(`
-**Utilisateur :** ${targetUser.username}
-**Nouvelles permissions :**
-• Lancer des batailles avec \`/battle start\`
-• Annuler des batailles en attente
-• Voir les statistiques avancées
-
-**🎭 Message RP :** *${targetUser.username} reçoit l'épée dorée du Maître de Guerre ! Les pouvoirs de l'arène lui sont accordés !*
-    `)
-    .setThumbnail(targetUser.displayAvatarURL())
-    .setTimestamp();
-
-  await interaction.editReply({ embeds: [embed] });
-  
-  logger.info(`Admin ${interaction.user.id} set ${targetUser.id} as battle moderator`);
-}
-
-async function handleRemoveModerator(interaction: CommandInteraction, databaseService: DatabaseService) {
-  const targetUser = interaction.options.getUser('user');
-  
-  if (!targetUser) {
-    await interaction.editReply('❌ Utilisateur non trouvé !');
-    return;
-  }
-
-  const redisService = new RedisService();
-  await redisService.hDel('battle:moderators', targetUser.id);
-  
-  const embed = new EmbedBuilder()
-    .setTitle('👑 Modérateur Démis !')
-    .setColor(0x808080)
-    .setDescription(`
-**Utilisateur :** ${targetUser.username}
-**Permissions retirées :** Modération des batailles
-
-**🎭 Message RP :** *L'épée dorée disparaît dans un nuage de fumée... ${targetUser.username} retourne parmi les simples combattants.*
-    `)
-    .setThumbnail(targetUser.displayAvatarURL())
-    .setTimestamp();
-
-  await interaction.editReply({ embeds: [embed] });
-  
-  logger.info(`Admin ${interaction.user.id} removed ${targetUser.id} as battle moderator`);
-}
-
-async function handleBattleStats(interaction: CommandInteraction, battleService: BattleService) {
-  const activeBattles = await battleService.getActiveBattles();
-  
-  // Statistiques générales (simulées pour l'exemple)
-  const totalBattlesThisWeek = 47; // À récupérer de la DB
-  const totalPrizePoolToday = 1250.50; // À calculer
-  const topWarrior = 'CryptoSlayer#1337'; // À récupérer du leaderboard
-  
-  const embed = new EmbedBuilder()
-    .setTitle('📊 Empire des Batailles - Statistiques')
+    .setTitle('📊 Status de la Bataille Actuelle')
     .setColor(0x3498db)
-    .setDescription('**Rapport du Maître de Guerre**')
     .addFields([
       {
-        name: '⚔️ Batailles Actives',
-        value: `${activeBattles.length} en cours`,
+        name: '🆔 Battle ID',
+        value: `\`${currentBattle.id.slice(0, 8)}...\``,
         inline: true
       },
       {
-        name: '📈 Cette Semaine',
-        value: `${totalBattlesThisWeek} batailles`,
+        name: '📊 Status',
+        value: getStatusEmoji(currentBattle.status),
         inline: true
       },
       {
-        name: '💰 Cagnotte du Jour',
-        value: `${totalPrizePoolToday} tokens`,
+        name: '👥 Participants',
+        value: `${currentBattle.participants.length}/${currentBattle.maxPlayers}`,
         inline: true
       },
       {
-        name: '🏆 Champion Actuel',
-        value: topWarrior,
+        name: '⏰ Temps Restant',
+        value: currentBattle.status === 'registration' ? 
+               `${minutesLeft} minutes` : 
+               'N/A',
         inline: true
       },
       {
-        name: '👥 Participants Uniques',
-        value: '156 guerriers', // À calculer
+        name: '📍 Canal',
+        value: `<#${currentBattle.channelId}>`,
         inline: true
       },
       {
-        name: '🎭 Thème Favori',
-        value: '🐸 Grenouilles Degen',
+        name: '🔗 Message',
+        value: `[Voir l'annonce](https://discord.com/channels/${interaction.guildId}/${currentBattle.channelId}/${currentBattle.messageId})`,
         inline: true
       }
     ])
     .setTimestamp();
 
-  if (activeBattles.length > 0) {
-    const battlesList = activeBattles.map(battle => 
-      `• **${battle.id.slice(0, 8)}...** - ${battle.participants}/${battle.maxPlayers} joueurs - ${battle.prizePool}$ tokens`
-    ).slice(0, 5).join('\n');
-    
-    embed.addFields([{
-      name: '🎯 Batailles en Cours',
-      value: battlesList || 'Aucune bataille active',
-      inline: false
-    }]);
+  await interaction.editReply({ embeds: [embed] });
+}
+
+function getStatusEmoji(status: string): string {
+  switch (status) {
+    case 'registration': return '🟡 Inscriptions ouvertes';
+    case 'starting': return '🟠 Démarrage imminent';
+    case 'active': return '🔴 Combat en cours';
+    case 'finished': return '✅ Terminée';
+    default: return '❓ Inconnu';
   }
-
-  await interaction.editReply({ embeds: [embed] });
 }
 
-async function handleCleanup(interaction: CommandInteraction, battleService: BattleService) {
-  await battleService.cleanupOldBattles();
-  
-  const embed = new EmbedBuilder()
-    .setTitle('🧹 Nettoyage Effectué !')
-    .setColor(0x00ff00)
-    .setDescription(`
-**🗑️ Batailles anciennes supprimées**
-**📊 Cache Redis nettoyé**  
-**⚡ Performances optimisées**
+async function endRegistrationAndStartBattle(battleService: BattleService) {
+  if (!currentBattle || currentBattle.status !== 'registration') return;
 
-*Les annales des batailles d'hier ont été archivées dans les cryptes de l'Histoire !*
-    `)
-    .setTimestamp();
-
-  await interaction.editReply({ embeds: [embed] });
-  
-  logger.info(`Admin ${interaction.user.id} performed battle cleanup`);
-}
-
-// Fonction utilitaire pour vérifier si un utilisateur est modérateur
-export async function isBattleModerator(userId: string): Promise<boolean> {
   try {
-    const redisService = new RedisService();
-    const isMod = await redisService.hGet('battle:moderators', userId);
-    return isMod === 'true';
+    const channel = await battleService.client?.channels.fetch(currentBattle.channelId) as TextChannel;
+    if (!channel) return;
+
+    const battleInfo = await battleService.getBattleInfo(currentBattle.id);
+    
+    if (!battleInfo || battleInfo.participants < 2) {
+      // Pas assez de participants, annuler
+      const cancelEmbed = new EmbedBuilder()
+        .setTitle('❌ BATAILLE ANNULÉE')
+        .setColor(0xff0000)
+        .setDescription(`
+**Pas assez de participants !**
+
+Il faut au minimum 2 warriors pour démarrer une bataille.
+*"You can't mine alone in this cruel digital world..."*
+
+Les frais d'inscription ont été remboursés.
+        `)
+        .setTimestamp();
+
+      const message = await channel.messages.fetch(currentBattle.messageId);
+      await message.edit({ embeds: [cancelEmbed], components: [] });
+      
+      await battleService.cancelBattle(currentBattle.id);
+      currentBattle = null;
+      return;
+    }
+
+    // Démarrer la bataille !
+    currentBattle.status = 'starting';
+    
+    const startEmbed = new EmbedBuilder()
+      .setTitle('🔥 INITIALISATION DU COMBAT 🔥')
+      .setColor(0xff0000)
+      .setDescription(`
+**⚔️ TOUS LES SYSTÈMES SONT PRÊTS !**
+
+Les ${battleInfo.participants} warriors sont connectés au réseau de bataille.
+Cagnotte totale : **${battleInfo.prizePool} tokens**
+
+🚨 **DÉMARRAGE DU HACK-A-THON DE LA MORT DANS...**
+      `)
+      .setImage('https://media.giphy.com/media/3o7abKhOpu0NwenH3O/giphy.gif')
+      .setTimestamp();
+
+    const message = await channel.messages.fetch(currentBattle.messageId);
+    await message.edit({ embeds: [startEmbed], components: [] });
+
+    // Compte à rebours dramatique
+    for (let i = 5; i > 0; i--) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      const countdownEmbed = new EmbedBuilder()
+        .setTitle(`🔥 COMBAT IMMINENT 🔥`)
+        .setColor(0xff0000)
+        .setDescription(`
+**⚔️ TOUS LES SYSTÈMES SONT PRÊTS !**
+
+Les ${battleInfo.participants} warriors sont connectés au réseau de bataille.
+Cagnotte totale : **${battleInfo.prizePool} tokens**
+
+🚨 **DÉMARRAGE DANS... ${i}**
+        `)
+        .setTimestamp();
+
+      await message.edit({ embeds: [countdownEmbed] });
+    }
+
+    // GO GO GO !
+    currentBattle.status = 'active';
+    
+    const goEmbed = new EmbedBuilder()
+      .setTitle('💀 HACK OR DIE ! 💀')
+      .setColor(0x00ff00)
+      .setDescription(`
+**🎯 LA BATAILLE A COMMENCÉ !**
+
+*"In the digital arena, only the smartest survive..."*
+
+Les combats vont être générés automatiquement !
+Suivez les événements en temps réel...
+      `)
+      .setImage('https://media.giphy.com/media/YQitE4YNQNahy/giphy.gif')
+      .setTimestamp();
+
+    await message.edit({ embeds: [goEmbed] });
+
+    // Lancer la simulation de combat
+    await simulateEpicBattle(currentBattle.id, channel, battleService);
+
   } catch (error) {
-    logger.error('Error checking battle moderator status:', error);
-    return false;
+    logger.error('Error ending registration and starting battle:', error);
   }
 }
 
-export { BATTLE_THEMES };
+async function simulateEpicBattle(battleId: string, channel: TextChannel, battleService: BattleService) {
+  try {
+    // Récupérer les participants
+    const battle = await battleService.database.client.battle.findUnique({
+      where: { id: battleId },
+      include: { entries: { include: { user: true } } }
+    });
+
+    if (!battle) return;
+
+    let participants = battle.entries.map(entry => ({
+      id: entry.id,
+      userId: entry.userId,
+      username: entry.user.username,
+      eliminated: false
+    }));
+
+    // Générer des événements de combat épiques
+    let eventCount = 0;
+    const maxEvents = 15 + Math.floor(Math.random() * 10); // 15-25 événements
+
+    while (participants.filter(p => !p.eliminated).length > 1 && eventCount < maxEvents) {
+      await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 4000)); // 3-7 secondes
+
+      const alive = participants.filter(p => !p.eliminated);
+      if (alive.length <= 1) break;
+
+      const eventType = getRandomEventType();
+      let eventMessage = '';
+
+      if (eventType === 'combat') {
+        const attacker = alive[Math.floor(Math.random() * alive.length)];
+        const targets = alive.filter(p => p.userId !== attacker.userId);
+        const defender = targets[Math.floor(Math.random() * targets.length)];
+
+        const combatStyle = Math.random();
+        if (combatStyle < 0.4) {
+          // Sérieux
+          eventMessage = MINING_BATTLE_EVENTS.combat_serious[
+            Math.floor(Math.random() * MINING_BATTLE_EVENTS.combat_serious.length)
+          ].replace('{attacker}', `**${attacker.username}**`)
+           .replace('{defender}', `**${defender.username}**`);
+        } else if (combatStyle < 0.7) {
+          // Drôle
+          eventMessage = MINING_BATTLE_EVENTS.combat_funny[
+            Math.floor(Math.random() * MINING_BATTLE_EVENTS.combat_funny.length)
+          ].replace('{attacker}', `**${attacker.username}**`)
+           .replace('{defender}', `**${defender.username}**`);
+        } else {
+          // Bizarre
+          eventMessage = MINING_BATTLE_EVENTS.combat_weird[
+            Math.floor(Math.random() * MINING_BATTLE_EVENTS.combat_weird.length)
+          ].replace('{attacker}', `**${attacker.username}**`)
+           .replace('{defender}', `**${defender.username}**`);
+        }
+
+        // Chance d'élimination (plus probable vers la fin)
+        const eliminationChance = 0.3 + (eventCount / maxEvents) * 0.4;
+        if (Math.random() < eliminationChance && alive.length > 2) {
+          defender.eliminated = true;
+          
+          const elimMessage = MINING_BATTLE_EVENTS.elimination[
+            Math.floor(Math.random() * MINING_BATTLE_EVENTS.elimination.length)
+          ].replace('{username}', `**${defender.username}**`);
+
+          eventMessage += `\n\n🚨 **ÉLIMINATION !** ${elimMessage}`;
+        }
+      }
+
+      if (eventMessage) {
+        const embed = new EmbedBuilder()
+          .setColor(0xff6600)
+          .setDescription(eventMessage)
+          .setFooter({ text: `⚔️ ${alive.length} combattants restants` })
+          .setTimestamp();
+
+        await channel.send({ embeds: [embed] });
+      }
+
+      eventCount++;
+    }
+
+    // Annoncer le vainqueur
+    const winner = participants.find(p => !p.eliminated);
+    if (winner) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      const victoryMessage = MINING_BATTLE_EVENTS.victory[
+        Math.floor(Math.random() * MINING_BATTLE_EVENTS.victory.length)
+      ].replace('{username}', `**${winner.username}**`);
+
+      const victoryEmbed = new EmbedBuilder()
+        .setTitle('🏆 VICTOIRE ÉPIQUE ! 🏆')
+        .setColor(0xffd700)
+        .setDescription(`
+${victoryMessage}
+
+**🎯 BATAILLE TERMINÉE !**
+*"In the matrix of mining, ${winner.username} found the ultimate algorithm..."*
+
+Les récompenses sont en cours de distribution...
+        `)
+        .setImage('https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif')
+        .setTimestamp();
+
+      await channel.send({ embeds: [victoryEmbed] });
+
+      // Terminer la bataille dans le service
+      currentBattle = null;
+    }
+
+  } catch (error) {
+    logger.error('Error simulating epic battle:', error);
+  }
+}
+
+function getRandomEventType(): 'combat' | 'special' {
+  return Math.random() < 0.8 ? 'combat' : 'special';
+}
+
+// Export pour les autres modules
+export { MINING_BATTLE_EVENTS };
