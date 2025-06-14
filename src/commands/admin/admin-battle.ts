@@ -1,7 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, CommandInteraction, PermissionFlagsBits, TextChannel, ButtonBuilder, ActionRowBuilder, ButtonStyle } from 'discord.js';
-import { DatabaseService } from '../../services/database/DatabaseService';
-import { RedisService } from '../../services/cache/RedisService';
-import { BattleService } from '../../services/battle/BattleService';
+import { SlashCommandBuilder, EmbedBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, ButtonBuilder, ActionRowBuilder, ButtonStyle } from 'discord.js';
 import { logger } from '../../utils/logger';
 
 export const data = new SlashCommandBuilder()
@@ -123,22 +120,25 @@ export let currentBattle: {
   participants: string[];
 } | null = null;
 
-export async function execute(interaction: CommandInteraction) {
+export async function execute(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   try {
     await interaction.deferReply({ ephemeral: true });
 
     const subcommand = interaction.options.getSubcommand();
-    const databaseService = new DatabaseService();
-    const redisService = new RedisService();
-    const battleService = new BattleService(databaseService, redisService);
+    const databaseService = services.get('database');
+    const cacheService = services.get('cache');
+
+    if (!databaseService) {
+      throw new Error('Database service not available');
+    }
 
     switch (subcommand) {
       case 'start':
-        await handleStartBattle(interaction, battleService);
+        await handleStartBattle(interaction, services);
         break;
       
       case 'force-end':
-        await handleForceEnd(interaction, battleService);
+        await handleForceEnd(interaction, services);
         break;
       
       case 'status':
@@ -162,15 +162,22 @@ export async function execute(interaction: CommandInteraction) {
   }
 }
 
-async function handleStartBattle(interaction: CommandInteraction, battleService: BattleService) {
+async function handleStartBattle(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   // Vérifier qu'il n'y a pas déjà une bataille
   if (currentBattle && currentBattle.status !== 'finished') {
     await interaction.editReply('❌ Une bataille est déjà en cours ! Utilisez `/admin-battle force-end` pour la terminer.');
     return;
   }
 
-  const maxPlayers = interaction.options.get('max-joueurs')?.value as number;
-  const registrationTime = interaction.options.get('temps-inscription')?.value as number;
+  const maxPlayers = interaction.options.getInteger('max-joueurs') || 10;
+  const registrationTime = interaction.options.getInteger('temps-inscription') || 10;
+  
+  const databaseService = services.get('database');
+  const cacheService = services.get('cache');
+  
+  // Créer le BattleService dynamiquement
+  const { BattleService } = await import('../../services/battle/BattleService');
+  const battleService = new BattleService(databaseService, cacheService);
   
   const result = await battleService.createBattle(maxPlayers);
   
@@ -258,7 +265,7 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
 
   // Programmer la fin des inscriptions
   setTimeout(async () => {
-    await endRegistrationAndStartBattle(battleService);
+    await endRegistrationAndStartBattle(services);
   }, registrationTime * 60 * 1000);
 
   // Confirmation pour l'admin
@@ -280,12 +287,19 @@ La bataille a été annoncée publiquement !
   logger.info(`Admin ${interaction.user.id} started battle ${result.battleId}`);
 }
 
-async function handleForceEnd(interaction: CommandInteraction, battleService: BattleService) {
+async function handleForceEnd(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   if (!currentBattle) {
     await interaction.editReply('❌ Aucune bataille en cours !');
     return;
   }
 
+  const databaseService = services.get('database');
+  const cacheService = services.get('cache');
+  
+  // Créer le BattleService dynamiquement
+  const { BattleService } = await import('../../services/battle/BattleService');
+  const battleService = new BattleService(databaseService, cacheService);
+  
   const result = await battleService.cancelBattle(currentBattle.id);
   
   // Mettre à jour le message d'annonce
@@ -328,7 +342,7 @@ ${result.message}
   logger.info(`Admin ${interaction.user.id} force-ended current battle`);
 }
 
-async function handleStatus(interaction: CommandInteraction) {
+async function handleStatus(interaction: ChatInputCommandInteraction) {
   if (!currentBattle) {
     await interaction.editReply('📭 Aucune bataille en cours actuellement.');
     return;
@@ -389,11 +403,21 @@ function getStatusEmoji(status: string): string {
   }
 }
 
-async function endRegistrationAndStartBattle(battleService: BattleService) {
+async function endRegistrationAndStartBattle(services: Map<string, any>) {
   if (!currentBattle || currentBattle.status !== 'registration') return;
 
   try {
-    const channel = await battleService.client?.channels.fetch(currentBattle.channelId) as TextChannel;
+    const databaseService = services.get('database');
+    const cacheService = services.get('cache');
+    
+    // Créer le BattleService dynamiquement
+    const { BattleService } = await import('../../services/battle/BattleService');
+    const battleService = new BattleService(databaseService, cacheService);
+    
+    // Récupérer le client Discord depuis les services (il devrait être disponible via le bot principal)
+    const client = services.get('client') || services.get('discord');
+    
+    const channel = await client.channels.fetch(currentBattle.channelId) as TextChannel;
     if (!channel) return;
 
     const battleInfo = await battleService.getBattleInfo(currentBattle.id);
@@ -481,17 +505,19 @@ Suivez les événements en temps réel...
     await message.edit({ embeds: [goEmbed] });
 
     // Lancer la simulation de combat
-    await simulateEpicBattle(currentBattle.id, channel, battleService);
+    await simulateEpicBattle(currentBattle.id, channel, services);
 
   } catch (error) {
     logger.error('Error ending registration and starting battle:', error);
   }
 }
 
-async function simulateEpicBattle(battleId: string, channel: TextChannel, battleService: BattleService) {
+async function simulateEpicBattle(battleId: string, channel: TextChannel, services: Map<string, any>) {
   try {
+    const databaseService = services.get('database');
+    
     // Récupérer les participants
-    const battle = await battleService.database.client.battle.findUnique({
+    const battle = await databaseService.client.battle.findUnique({
       where: { id: battleId },
       include: { entries: { include: { user: true } } }
     });
