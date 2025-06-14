@@ -92,21 +92,21 @@ export async function execute(interaction: ChatInputCommandInteraction, services
             const statusEmoji = log.success ? '✅' : '❌';
             const detectedText = log.detected ? ' 🔍' : '';
             logText += `${statusEmoji} **Attaque sur ${otherUser}**${detectedText}\n`;
-            logText += `   └ ${this.getAttackTypeEmoji(log.type)} ${log.type}`;
+            logText += `   └ ${getAttackTypeEmoji(log.type)} ${log.type}`;
             
             if (log.success && log.damage > 0) {
-              if (log.type === 'BRUTAL_THEFT') {
+                if (log.type === 'BRUTAL_THEFT') {
                 logText += ` (+${log.damage.toFixed(1)} tokens)`;
-              } else if (log.duration > 0) {
+                } else if (log.duration > 0) {
                 logText += ` (${log.duration}min)`;
-              }
+                }
             }
           } else {
             // L'utilisateur était la cible
             const statusEmoji = log.success ? '🚨' : '🛡️';
             const attackerName = log.detected ? log.attacker.username : 'Inconnu';
             logText += `${statusEmoji} **Attaqué par ${attackerName}**\n`;
-            logText += `   └ ${this.getAttackTypeEmoji(log.type)} ${log.type}`;
+            logText += `   └ ${getAttackTypeEmoji(log.type)} ${log.type}`;
             
             if (log.success && log.damage > 0) {
               if (log.type === 'BRUTAL_THEFT') {
@@ -156,8 +156,8 @@ export async function execute(interaction: ChatInputCommandInteraction, services
     }
   }
 
-  // Méthode helper pour obtenir l'emoji du type d'attaque
-  private getAttackTypeEmoji(attackType: string): string {
+  // Helper function to get the emoji for the attack type
+  function getAttackTypeEmoji(attackType: string): string {
     const emojis = {
       'VIRUS_Z3_MINER': '🦠',
       'BLACKOUT_TARGETED': '⚡',
@@ -166,6 +166,6 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       'BRUTAL_THEFT': '💰'
     };
     
-    return emojis[attackType] || '⚔️';
+    return emojis[attackType as keyof typeof emojis] || '⚔️';
   }
 }

@@ -23,6 +23,18 @@ enum TransactionType {
   MACHINE_BREAKDOWN    // Compensation pour pannes critiques
   EFFICIENCY_BONUS     // Bonus pour machines bien entretenues
   WEAR_PENALTY         // Pénalités dues à l'usure
+  BLACK_MARKET_PURCHASE
+  WEEKLY_SALARY
+}
+
+enum HousingType {
+  CHAMBRE_MAMAN
+  STUDIO  
+  APPARTEMENT_1P
+  APPARTEMENT_2P
+  MAISON
+  ENTREPOT
+  USINE
 }
 
 enum MachineType {
@@ -43,9 +55,9 @@ enum BattleStatus {
 enum ActivityType {
   MESSAGE
   REACTION
-  VOICE_TIME
   DAILY_LOGIN
   STREAK_BONUS
+  WEEKLY_SALARY  
 }
 
 enum EventType {
@@ -127,6 +139,14 @@ model User {
   lastActivityReset   DateTime @default(now())
   loginStreak         Int      @default(0)
   lastLogin           DateTime @default(now())
+
+  housingType         HousingType @default(CHAMBRE_MAMAN)
+  rentDue             DateTime?   // Prochaine échéance de loyer
+  rentOverdue         Boolean     @default(false)
+  totalRentPaid       Float       @default(0.0)
+  evictionWarnings    Int         @default(0)
+  lastRentPayment     DateTime?
+  machinesDisabled    Boolean     @default(false)
   
   // Relations
   machines            Machine[]
@@ -143,6 +163,9 @@ model User {
   sabotageImmunities  SabotageImmunity[]
   missionAttempts     MissionAttempt[]
   blackMarketPurchases BlackMarketPurchase[]
+  housingHistory      HousingHistory[]
+  rentPayments        RentPayment[]
+  dailyStats          DailyStats[]
   
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -200,6 +223,24 @@ model MachineHistory {
   timestamp   DateTime @default(now())
   
   @@map("machine_history")
+}
+
+model DailyStats {
+  id            String   @id @default(cuid())
+  userId        String
+  date          String   // Format: "2025-06-14"
+  messagesCount Int      @default(0)
+  reactionsCount Int     @default(0)
+  lastActivity  DateTime @default(now())
+  streakDays    Int      @default(0)
+  lastSalaryDate DateTime? // 🆕 Pour tracker le dernier salaire récupéré
+
+  user User @relation(fields: [userId], references: [discordId])
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+  @@map("daily_stats")
 }
 
 model MaintenanceAlert {
@@ -272,16 +313,33 @@ model Transaction {
   @@map("transactions")
 }
 
+model Cache {
+  id        String    @id @default(cuid())
+  key       String    @unique
+  value     String
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([key])
+  @@index([expiresAt])
+  @@map("cache")
+}
+
+
 model ActivityReward {
-  id         String       @id @default(cuid())
+  id         String      @id @default(cuid())
   userId     String
   type       ActivityType
   amount     Float
-  timestamp  DateTime     @default(now())
-  multiplier Float        @default(1.0)
+  multiplier Float       @default(1.0)
+  createdAt  DateTime    @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [discordId])
 
+  @@index([userId])
+  @@index([type])
+  @@index([createdAt])
   @@map("activity_rewards")
 }
 
@@ -441,4 +499,35 @@ model BlackMarketPurchase {
   offer BlackMarketOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
 
   @@map("black_market_purchases")
+}
+
+model HousingHistory {
+  id              String      @id @default(cuid())
+  userId          String
+  oldHousingType  HousingType
+  newHousingType  HousingType
+  reason          String      // Raison du déménagement
+  cost            Float       @default(0.0)
+  timestamp       DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("housing_history")
+}
+
+model RentPayment {
+  id          String      @id @default(cuid())
+  userId      String
+  housingType HousingType
+  amount      Float
+  period      String      // Format YYYY-MM
+  dueDate     DateTime
+  paidAt      DateTime?
+  lateFee     Float       @default(0.0)
+  status      String      @default("PENDING") // PENDING, PAID, OVERDUE, CANCELLED
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, period])
+  @@map("rent_payments")
 }

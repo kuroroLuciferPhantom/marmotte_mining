@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { ActivityService } from '../../services/activity/ActivityService';
+import { HousingService } from '../../services/housing/HousingService';
 
 export const data = new SlashCommandBuilder()
   .setName('profile')
@@ -15,6 +16,10 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       where: { discordId: interaction.user.id },
       include: { machines: true }
     });
+
+    const housingService = new HousingService(databaseService.getInstance().prisma);
+    const housingInfo = housingService.getHousingInfo(user.housingType);
+    const rentStatus = await housingService.getRentStatus(user.id);
 
     if (!user) {
       // Rediriger vers l'inscription au lieu de créer automatiquement
@@ -50,6 +55,8 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       .setDescription(user.tokens > 1000 ? '🔥 Mineur expérimenté!' : '⛏️ Mineur en développement')
       .addFields(
         { name: '📍 Lieu', value: user.location || 'Chambre chez maman', inline: true },
+        { name: '🏠 Logement', value: `${housingInfo.emoji} ${housingInfo.name}`, inline: true },
+        { name: '🔧 Capacité', value: `${user.machines.length.toString()}/${housingInfo.maxMachines} machines`, inline: true },
         { name: '💰 Tokens', value: user.tokens.toFixed(2), inline: true },
         { name: '💵 Dollars', value: `${dollarBalance.toFixed(2)}$`, inline: true },
         { name: '⛏️ Machines', value: user.machines.length.toString(), inline: true },

@@ -3,6 +3,7 @@ import { DatabaseService } from '../database/DatabaseService';
 import { RedisService } from '../cache/RedisService';
 import { logger } from '../../utils/logger';
 import { config } from '../../config/config';
+import { HousingService } from '../housing/HousingService';
 
 interface MiningStats {
   tokensPerSecond: number;
@@ -110,6 +111,15 @@ export class MiningService {
 
       if (user.miningActive) {
         return { success: false, message: 'Vous êtes déjà en train de miner!' };
+      }
+
+      const operationalCheck = await this.checkMachinesOperational(userId);
+  
+      if (!operationalCheck.operational) {
+        return { 
+          success: false, 
+          message: 'Pas de loyer, pas de minage!'
+        };
       }
 
       // Vérifie si des machines ont besoin de maintenance critique
@@ -307,6 +317,76 @@ export class MiningService {
 
     return results;
   }
+
+  /**
+   * Vérifie si l'utilisateur peut ajouter une nouvelle machine
+   */
+  async checkMachineCapacity(userId: string): Promise<{ canAdd: boolean; message: string; current: number; max: number }> {
+    const user = await this.database.client.user.findUnique({
+      where: { id: userId },
+      include: { machines: true }
+    });
+
+    if (!user) {
+      throw new Error('Utilisateur non trouvé');
+    }
+
+    const housingService = new HousingService(this.database.client);
+    const housingInfo = housingService.getHousingInfo(user.housingType);
+    const currentMachines = user.machines.filter(m => m.durability > 0).length;
+
+    const canAdd = currentMachines < housingInfo.maxMachines;
+    const message = canAdd 
+      ? `Vous pouvez ajouter ${housingInfo.maxMachines - currentMachines} machine(s) supplémentaire(s).`
+      : `Capacité maximale atteinte pour ${housingInfo.name}. Déménagez pour plus d'espace !`;
+
+    return {
+      canAdd,
+      message,
+      current: currentMachines,
+      max: housingInfo.maxMachines
+    };
+  }
+
+  /**
+   * Vérifie si les machines peuvent fonctionner (loyer payé)
+   */
+  async checkMachinesOperational(userId: string): Promise<{ operational: boolean; reason?: string }> {
+    const user = await this.database.client.user.findUnique({
+      where: { id: userId }
+    });
+
+    if (!user) {
+      return { operational: false, reason: 'Utilisateur non trouvé' };
+    }
+
+    // Si les machines sont désactivées pour loyer impayé
+    if (user.machinesDisabled) {
+      return { operational: false, reason: 'Machines arrêtées - Loyer impayé depuis plus de 7 jours' };
+    }
+
+    // Vérifier si le loyer est très en retard (30+ jours = expulsion automatique)
+    if (user.rentDue && user.rentDue < new Date()) {
+      const daysOverdue = Math.floor((new Date().getTime() - user.rentDue.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (daysOverdue >= 30) {
+        // Auto-expulsion
+        await this.handleAutoEviction(userId);
+        return { operational: false, reason: 'Expulsion automatique - Retour chez maman forcé' };
+      }
+    }
+
+    return { operational: true };
+  }
+
+/**
+ * Gère l'expulsion automatique
+ */
+private async handleAutoEviction(userId: string): Promise<void> {
+  const housingService = new HousingService(this.database.client);
+  // L'expulsion est gérée par le HousingService.processOverdueRents()
+  await housingService.processOverdueRents();
+}
 
   /**
    * Calcule les coûts énergétiques en fonction du temps de minage
@@ -660,6 +740,16 @@ export class MiningService {
         return { 
           success: false, 
           message: `Fonds insuffisants! Vous avez besoin de ${machineConfig.cost} tokens.` 
+        };
+      }
+
+      // Vérifier la capacité avant l'achat
+      const capacityCheck = await this.checkMachineCapacity(userId);
+      
+      if (!capacityCheck.canAdd) {
+        return { 
+          success: false, 
+          message: `Espace insuffisant! Utilisez \`/demenager\` pour un logement plus grand !` 
         };
       }
 
