@@ -46,7 +46,7 @@ export class BattleInteractionHandler {
     }
   }
 
-  // Fonction adaptée pour créer/vérifier l'utilisateur
+  // 🆕 Fonction améliorée pour créer/vérifier l'utilisateur
   private async ensureUserExists(discordId: string, username: string) {
     try {
       let user = await this.databaseService.client.user.findUnique({
@@ -112,37 +112,36 @@ export class BattleInteractionHandler {
       return;
     }
 
-    // Vérifier si la bataille est pleine
-    if (currentBattle.participants.length >= currentBattle.maxPlayers) {
+    // 🆕 Plus de vérification de limite car places illimitées (999)
+
+    // Créer le BattleService dynamiquement avec le nouveau service
+    const { BattleService } = await import('./BattleService');
+    const battleService = new BattleService(this.databaseService, this.cacheService);
+
+    // 🆕 Utiliser l'ID interne de l'utilisateur au lieu de l'ID Discord
+    const user = await this.databaseService.client.user.findUnique({
+      where: { discordId: interaction.user.id }
+    });
+
+    if (!user) {
       await interaction.editReply({
         embeds: [new EmbedBuilder()
           .setColor(0xff0000)
-          .setTitle('🚫 Server Full')
-          .setDescription('Cette bataille est complète !\n\n*"No more connections available. Try again later."*')
+          .setTitle('❌ User Not Found')
+          .setDescription('**Erreur de profil !**\n\nVotre compte n\'a pas pu être créé. Réessayez dans quelques instants.')
           .setTimestamp()]
       });
       return;
     }
 
-    // Créer le BattleService dynamiquement
-    const { BattleService } = await import('./BattleService');
-    const battleService = new BattleService(this.databaseService, this.cacheService);
-
-    // Tenter de rejoindre
-    const result = await battleService.joinBattle(interaction.user.id, battleId);
+    // Tenter de rejoindre avec l'ID interne
+    const result = await battleService.joinBattle(user.id, battleId);
 
     if (!result.success) {
       const failEmbed = new EmbedBuilder()
         .setColor(0xff0000)
         .setTitle('🚫 Join Failed')
         .setDescription(`**Access denied !**\n\n${result.message}`)
-        .addFields([
-          {
-            name: '💡 Troubleshooting',
-            value: '• Check your token balance\n• Wait for cooldown to expire\n• Contact admin if issue persists',
-            inline: false
-          }
-        ])
         .setTimestamp();
 
       await interaction.editReply({ embeds: [failEmbed] });
@@ -166,12 +165,7 @@ export class BattleInteractionHandler {
 
     const entryMessage = entryMessages[Math.floor(Math.random() * entryMessages.length)];
 
-    // Obtenir le niveau de l'utilisateur pour calculer les frais
-    const user = await this.databaseService.client.user.findUnique({
-      where: { discordId: interaction.user.id }
-    });
-    const entryFee = user ? Math.max(10, (user.level || 1) * 5) : 10;
-
+    // 🆕 Pas de frais d'entrée !
     const successEmbed = new EmbedBuilder()
       .setColor(0x00ff00)
       .setTitle('✅ Welcome to the Arena !')
@@ -179,7 +173,7 @@ export class BattleInteractionHandler {
 ${entryMessage}
 
 **🎮 Connection successful !**
-Entry fee paid: **${entryFee} tokens**
+**🆓 ENTRÉE GRATUITE** - Nouveau système !
 
 *"You are now part of the digital resistance..."*
       `)
@@ -191,12 +185,12 @@ Entry fee paid: **${entryFee} tokens**
         },
         {
           name: '👥 Connected Users',
-          value: `${currentBattle.participants.length}/${currentBattle.maxPlayers}`,
+          value: `${currentBattle.participants.length} warriors`,
           inline: true
         },
         {
-          name: '💰 Prize Pool',
-          value: `${result.battleInfo?.prizePool || 0} tokens`,
+          name: '🎁 Rewards',
+          value: '1er: 100 tokens\n2e: 50 tokens\n3e: 25 tokens',
           inline: true
         }
       ])
@@ -214,7 +208,7 @@ Entry fee paid: **${entryFee} tokens**
         const announceEmbed = new EmbedBuilder()
           .setColor(0x00ff00)
           .setDescription(`${entryMessage}\n\n*A new warrior enters the digital battlefield !*`)
-          .setFooter({ text: `${currentBattle.participants.length}/${currentBattle.maxPlayers} participants` })
+          .setFooter({ text: `${currentBattle.participants.length} participants connectés` })
           .setTimestamp();
 
         await textChannel.send({ embeds: [announceEmbed] });
@@ -225,13 +219,13 @@ Entry fee paid: **${entryFee} tokens**
           const updatedEmbed = new EmbedBuilder(originalMessage.embeds[0].toJSON())
             .setFields(
               {
-                name: '🏆 Prize Pool',
-                value: `${result.battleInfo?.prizePool || 0} tokens`,
+                name: '🏆 Récompenses',
+                value: '1er: 100 tokens\n2e: 50 tokens\n3e: 25 tokens\n4e: 10 tokens\n5e: 5 tokens',
                 inline: true
               },
               {
                 name: '👥 Participants',
-                value: `${currentBattle.participants.length}/${currentBattle.maxPlayers}`,
+                value: `${currentBattle.participants.length} warriors\n+ 5 bots de test`,
                 inline: true
               },
               {
@@ -248,7 +242,7 @@ Entry fee paid: **${entryFee} tokens**
       logger.error('Error announcing new participant:', error);
     }
 
-    logger.info(`User ${interaction.user.id} joined battle ${battleId} via button`);
+    logger.info(`User ${interaction.user.id} joined battle ${battleId} via button - FREE ENTRY`);
   }
 
   private async handleInfoButton(interaction: ButtonInteraction): Promise<void> {
@@ -285,7 +279,7 @@ Entry fee paid: **${entryFee} tokens**
     const infoEmbed = new EmbedBuilder()
       .setTitle('📊 Battle Information System')
       .setColor(0x3498db)
-      .setDescription('**Detailed combat node analysis**')
+      .setDescription('**Detailed combat node analysis - NEW SYSTEM**')
       .addFields([
         {
           name: '🆔 Battle ID',
@@ -299,12 +293,12 @@ Entry fee paid: **${entryFee} tokens**
         },
         {
           name: '👥 Capacity',
-          value: `${battleInfo.participants}/${battleInfo.maxPlayers}`,
+          value: `${battleInfo.participants} warriors (illimité)`,
           inline: true
         },
         {
-          name: '💰 Total Rewards',
-          value: `${battleInfo.prizePool} tokens`,
+          name: '🆓 Entry Cost',
+          value: '**GRATUIT** - Plus de frais !',
           inline: true
         },
         {
@@ -315,27 +309,24 @@ Entry fee paid: **${entryFee} tokens**
           inline: true
         },
         {
-          name: '🏆 Prize Distribution',
-          value: '🥇 50% • 🥈 25% • 🥉 15%\n🏅 4th-6th: 3.33% each',
+          name: '🏆 Fixed Rewards',
+          value: '🥇 100 tokens\n🥈 50 tokens\n🥉 25 tokens\n🏅 4e: 10 tokens\n🏅 5e: 5 tokens',
           inline: true
         }
       ])
       .setTimestamp();
 
-    // Entry requirements
+    // 🆕 Plus de vérification de frais car c'est gratuit
     if (currentBattle.status === 'registration') {
       try {
         const user = await this.databaseService.client.user.findUnique({
           where: { discordId: interaction.user.id }
         });
         
-        const entryFee = user ? Math.max(10, (user.level || 1) * 5) : 10;
-        const hasEnoughTokens = user ? user.tokens >= entryFee : false;
-        
         infoEmbed.addFields([
           {
-            name: '💳 Your Entry Fee',
-            value: `${entryFee} tokens ${hasEnoughTokens ? '✅' : '❌'}`,
+            name: '💳 Your Entry',
+            value: 'FREE - No cost ! ✅',
             inline: true
           },
           {
@@ -345,7 +336,7 @@ Entry fee paid: **${entryFee} tokens**
           },
           {
             name: '✅ Eligible',
-            value: hasEnoughTokens ? 'Ready to fight !' : 'Insufficient funds',
+            value: '✅ Ready to fight !',
             inline: true
           }
         ]);
@@ -354,16 +345,21 @@ Entry fee paid: **${entryFee} tokens**
       }
     }
 
-    // Combat simulation info
+    // 🆕 Nouvelles infos sur les événements aléatoires
     infoEmbed.addFields([
       {
         name: '⚔️ Combat System',
-        value: 'Auto-battle with real-time events\nBased on level, tokens, and luck\nEpic roleplay narration included',
+        value: 'Auto-battle with EPIC random events\n• 🌋 Apocalypse events (mass elimination)\n• ✨ Revival events (resurrect players)\n• 🚀 Power boost events',
+        inline: false
+      },
+      {
+        name: '🎲 Random Events',
+        value: '• **Apocalypse** (10%): Elimine 30-60% des joueurs\n• **Résurrection** (10%): Ranime 1-3 joueurs\n• **Boost** (15%): Power-up cosmique\n• **Combat** (65%): Combat normal',
         inline: false
       },
       {
         name: '🎭 Battle Theme',
-        value: '💻 **Cyber Mining Warfare**\nHacking, mining, and digital chaos !\nSerious, funny, and bizarre events',
+        value: '💻 **Cyber Mining Warfare**\nHacking, mining, et chaos numérique !\nÉvénements sérieux, drôles, et bizarres',
         inline: false
       }
     ]);
