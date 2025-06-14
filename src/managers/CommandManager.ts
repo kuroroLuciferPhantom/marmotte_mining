@@ -1,4 +1,4 @@
-import { Client, Collection, REST, Routes } from 'discord.js';
+import { Client, Collection, REST, Routes, ButtonInteraction } from 'discord.js';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
 import fs from 'fs';
@@ -20,8 +20,8 @@ export class CommandManager {
 
     const commandsPath = path.join(__dirname, '..', 'commands');
     
-    // Load commands from subdirectories
-    const commandFolders = ['game', 'utility'];
+    // Load commands from subdirectories - AJOUT DU DOSSIER ADMIN
+    const commandFolders = ['game', 'utility', 'admin'];
     
     for (const folder of commandFolders) {
       const folderPath = path.join(commandsPath, folder);
@@ -86,36 +86,74 @@ export class CommandManager {
 
   setupCommandHandler(): void {
     this.client.on('interactionCreate', async (interaction) => {
-      if (!interaction.isChatInputCommand()) return;
+      // Gestion des slash commands
+      if (interaction.isChatInputCommand()) {
+        const command = this.commands.get(interaction.commandName);
 
-      const command = this.commands.get(interaction.commandName);
-
-      if (!command) {
-        logger.warn(`Unknown command: ${interaction.commandName}`);
-        await interaction.reply({
-          content: '❌ Commande inconnue.',
-          ephemeral: true
-        });
-        return;
-      }
-
-      try {
-        logger.info(`🎮 Executing command: ${interaction.commandName} by ${interaction.user.tag}`);
-        await command.execute(interaction, this.services);
-      } catch (error) {
-        logger.error(`Error executing command ${interaction.commandName}:`, error);
-        
-        const errorMessage = '❌ Une erreur est survenue lors de l\'exécution de cette commande.';
-        
-        if (interaction.replied || interaction.deferred) {
-          await interaction.followUp({ content: errorMessage, ephemeral: true });
-        } else {
-          await interaction.reply({ content: errorMessage, ephemeral: true });
+        if (!command) {
+          logger.warn(`Unknown command: ${interaction.commandName}`);
+          await interaction.reply({
+            content: '❌ Commande inconnue.',
+            ephemeral: true
+          });
+          return;
         }
+
+        try {
+          logger.info(`🎮 Executing command: ${interaction.commandName} by ${interaction.user.tag}`);
+          await command.execute(interaction, this.services);
+        } catch (error) {
+          logger.error(`Error executing command ${interaction.commandName}:`, error);
+          
+          const errorMessage = '❌ Une erreur est survenue lors de l\'exécution de cette commande.';
+          
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: errorMessage, ephemeral: true });
+          } else {
+            await interaction.reply({ content: errorMessage, ephemeral: true });
+          }
+        }
+      }
+      
+      // NOUVEAU : Gestion des boutons de bataille
+      else if (interaction.isButton()) {
+        const customId = interaction.customId;
+        
+        if (customId.startsWith('join_battle_') || customId.startsWith('info_battle_')) {
+          await this.handleBattleButtonInteraction(interaction as ButtonInteraction);
+        }
+        // Ici tu peux ajouter d'autres boutons existants si tu en as
       }
     });
 
     logger.info('✅ Command handler setup complete');
+  }
+
+  // NOUVELLE MÉTHODE : Gestion des boutons de bataille
+  private async handleBattleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
+    try {
+      // Import dynamique pour éviter les dépendances circulaires
+      const { handleBattleButtonInteraction } = await import('../services/battle/BattleInteractionHandler');
+      
+      const databaseService = this.services.get('database');
+      const cacheService = this.services.get('cache');
+      
+      await handleBattleButtonInteraction(interaction, databaseService, cacheService);
+      
+    } catch (error) {
+      logger.error('Error handling battle button interaction:', error);
+      
+      if (interaction.deferred) {
+        await interaction.editReply({
+          content: '❌ Erreur lors du traitement de l\'interaction.'
+        });
+      } else {
+        await interaction.reply({
+          content: '❌ Erreur lors du traitement de l\'interaction.',
+          ephemeral: true
+        });
+      }
+    }
   }
 
   getCommands(): Collection<string, any> {
