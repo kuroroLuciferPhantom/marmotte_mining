@@ -1,4 +1,5 @@
 import { logger } from '../../utils/logger';
+import { ICacheService } from '../cache/ICacheService';
 
 export interface BattlePermissionResult {
   success: boolean;
@@ -18,7 +19,7 @@ export interface UserPermissionInfo {
 export class BattlePermissionService {
   constructor(
     private databaseService: any,
-    private cacheService?: any
+    private cacheService?: ICacheService
   ) {}
 
   // ============ VÉRIFICATION DES PERMISSIONS ============
@@ -236,9 +237,9 @@ export class BattlePermissionService {
    * Invalide le cache des permissions pour un utilisateur
    */
   private async invalidatePermissionCache(discordId: string): Promise<void> {
-    if (this.cacheService) {
+    if (this.cacheService && this.cacheService.isHealthy) {
       try {
-        await this.cacheService.delete(`battle_permission:${discordId}`);
+        await this.cacheService.del(`battle_permission:${discordId}`);
       } catch (error) {
         logger.warn('Failed to invalidate permission cache:', error);
       }
@@ -249,7 +250,7 @@ export class BattlePermissionService {
    * Met en cache le statut des permissions (optionnel)
    */
   private async cachePermissionStatus(discordId: string, canStart: boolean): Promise<void> {
-    if (this.cacheService) {
+    if (this.cacheService && this.cacheService.isHealthy) {
       try {
         await this.cacheService.set(
           `battle_permission:${discordId}`,
@@ -266,7 +267,7 @@ export class BattlePermissionService {
    * Récupère le statut depuis le cache
    */
   private async getCachedPermissionStatus(discordId: string): Promise<boolean | null> {
-    if (!this.cacheService) return null;
+    if (!this.cacheService || !this.cacheService.isHealthy) return null;
 
     try {
       const cached = await this.cacheService.get(`battle_permission:${discordId}`);
