@@ -1,5 +1,6 @@
-import { SlashCommandBuilder, EmbedBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, ButtonBuilder, ActionRowBuilder, ButtonStyle } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, ButtonBuilder, ActionRowBuilder, ButtonStyle, User as DiscordUser } from 'discord.js';
 import { logger } from '../../utils/logger';
+import { any } from 'joi';
 
 export const data = new SlashCommandBuilder()
   .setName('admin-battle')
@@ -9,12 +10,6 @@ export const data = new SlashCommandBuilder()
     subcommand
       .setName('start')
       .setDescription('🚀 Lance une nouvelle bataille royale de mining')
-      .addIntegerOption(option =>
-        option.setName('max-joueurs')
-          .setDescription('Nombre maximum de participants (2-20)')
-          .setRequired(true)
-          .setMinValue(2)
-          .setMaxValue(20))
       .addIntegerOption(option =>
         option.setName('temps-inscription')
           .setDescription('Temps d\'inscription en minutes (1-30)')
@@ -28,7 +23,39 @@ export const data = new SlashCommandBuilder()
   .addSubcommand(subcommand =>
     subcommand
       .setName('status')
-      .setDescription('📊 Statut de la bataille actuelle'));
+      .setDescription('📊 Statut de la bataille actuelle'))
+  .addSubcommand(subcommand =>
+    subcommand
+      .setName('grant-permission')
+      .setDescription('✅ Accorde la permission de lancer des battles à un utilisateur')
+      .addUserOption(option =>
+        option.setName('utilisateur')
+          .setDescription('L\'utilisateur à qui accorder la permission')
+          .setRequired(true))
+      .addStringOption(option =>
+        option.setName('raison')
+          .setDescription('Raison de l\'octroi de la permission')
+          .setRequired(false)))
+  .addSubcommand(subcommand =>
+    subcommand
+      .setName('revoke-permission')
+      .setDescription('❌ Révoque la permission de lancer des battles d\'un utilisateur')
+      .addUserOption(option =>
+        option.setName('utilisateur')
+          .setDescription('L\'utilisateur à qui révoquer la permission')
+          .setRequired(true)))
+  .addSubcommand(subcommand =>
+    subcommand
+      .setName('list-permissions')
+      .setDescription('📋 Liste tous les utilisateurs autorisés à lancer des battles'))
+  .addSubcommand(subcommand =>
+    subcommand
+      .setName('check-permission')
+      .setDescription('🔍 Vérifie si un utilisateur peut lancer des battles')
+      .addUserOption(option =>
+        option.setName('utilisateur')
+          .setDescription('L\'utilisateur à vérifier')
+          .setRequired(true)));
 
 // Événements de bataille thématiques mining/crypto/hack
 const MINING_BATTLE_EVENTS = {
@@ -80,6 +107,34 @@ const MINING_BATTLE_EVENTS = {
     "🎭 {defender} découvre que toute sa fortune était en shitcoins... Dépression existentielle !",
     "🌊 Une vague de liquidations en cascade emporte {defender} vers l'abîme !",
     "🔬 {attacker} invente la fusion froide, rendant obsolètes tous les rigs de {defender} !"
+  ],
+
+  // 🆕 Événements aléatoires globaux
+  apocalypse: [
+    "🌋 **APOCALYPSE VOLCANIQUE !** Une éruption massive détruit plusieurs serveurs !",
+    "☄️ **IMPACT DE MÉTÉORITE !** Un astéroïde crypto frappe la bataille !",
+    "🌊 **TSUNAMI NUMÉRIQUE !** Une vague de données emporte tout sur son passage !",
+    "⚡ **TEMPÊTE ÉLECTROMAGNÉTIQUE !** Tous les équipements grillent !",
+    "🔥 **INCENDIE DE DATACENTER !** Les serveurs partent en fumée !",
+    "💥 **EXPLOSION DE SUPERNOVA !** L'énergie cosmique ravage l'arène !"
+  ],
+
+  revival: [
+    "✨ **RÉSURRECTION QUANTIQUE !** Des particules subatomiques ramènent les morts !",
+    "🔮 **MAGIE TECHNOLOGIQUE !** Un sort de résurrection 2.0 est lancé !",
+    "🧬 **CLONAGE D'URGENCE !** Les ADN numériques sont restaurés !",
+    "⚡ **DÉFIBRILLATEUR NUMÉRIQUE !** Choc électrique de réanimation !",
+    "🌟 **INTERVENTION DIVINE !** RNGesus décide de faire des miracles !",
+    "🔄 **BACKUP RESTAURÉ !** Les sauvegardes quantiques s'activent !"
+  ],
+
+  boost: [
+    "🚀 **BOOST COSMIC !** {username} reçoit les pouvoirs de l'univers !",
+    "⚡ **OVERCLOCK SUPRÊME !** {username} dépasse les limites de la physique !",
+    "💎 **MAIN DE DIAMANT !** {username} devient invincible !",
+    "🔥 **MODE BERSERK !** {username} entre en rage pure !",
+    "🌟 **ÉTOILE FILANTE !** {username} obtient des pouvoirs stellaires !",
+    "🎯 **PRÉCISION ABSOLUE !** {username} ne peut plus rater ses attaques !"
   ],
 
   // Éliminations
@@ -144,6 +199,22 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       case 'status':
         await handleStatus(interaction);
         break;
+
+      case 'grant-permission':
+        await handleGrantPermission(interaction, services);
+        break;
+
+      case 'revoke-permission':
+        await handleRevokePermission(interaction, services);
+        break;
+
+      case 'list-permissions':
+        await handleListPermissions(interaction, services);
+        break;
+
+      case 'check-permission':
+        await handleCheckPermission(interaction, services);
+        break;
       
       default:
         await interaction.editReply('❌ Sous-commande non reconnue.');
@@ -162,6 +233,217 @@ export async function execute(interaction: ChatInputCommandInteraction, services
   }
 }
 
+// ============ NOUVELLES FONCTIONS DE GESTION DES PERMISSIONS ============
+
+async function handleGrantPermission(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
+  const targetUser = interaction.options.getUser('utilisateur') as DiscordUser;
+  const reason = interaction.options.getString('raison');
+  
+  const databaseService = services.get('database');
+  const cacheService = services.get('cache');
+  
+  // Créer le service de permissions
+  const { BattlePermissionService } = await import('../../services/battle/BattlePermissionService');
+  const permissionService = new BattlePermissionService(databaseService, cacheService);
+  
+  const result = await permissionService.grantBattlePermission(
+    targetUser.id,
+    targetUser.username,
+    interaction.user.id,
+    reason || undefined
+  );
+
+  const embed = new EmbedBuilder()
+    .setTitle(result.success ? '✅ Permission Accordée' : '❌ Échec')
+    .setColor(result.success ? 0x00ff00 : 0xff0000)
+    .setDescription(result.message)
+    .addFields([
+      {
+        name: '👤 Utilisateur',
+        value: `${targetUser.username} (${targetUser.id})`,
+        inline: true
+      },
+      {
+        name: '🛡️ Admin',
+        value: interaction.user.username,
+        inline: true
+      }
+    ]);
+
+  if (reason) {
+    embed.addFields([{
+      name: '📝 Raison',
+      value: reason,
+      inline: false
+    }]);
+  }
+
+  embed.setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+  
+  logger.info(`Admin ${interaction.user.id} granted battle permission to ${targetUser.id}`);
+}
+
+async function handleRevokePermission(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
+  const targetUser = interaction.options.getUser('utilisateur') as DiscordUser;
+  
+  const databaseService = services.get('database');
+  const cacheService = services.get('cache');
+  
+  // Créer le service de permissions
+  const { BattlePermissionService } = await import('../../services/battle/BattlePermissionService');
+  const permissionService = new BattlePermissionService(databaseService, cacheService);
+  
+  const result = await permissionService.revokeBattlePermission(targetUser.id);
+
+  const embed = new EmbedBuilder()
+    .setTitle(result.success ? '✅ Permission Révoquée' : '❌ Échec')
+    .setColor(result.success ? 0x00ff00 : 0xff0000)
+    .setDescription(result.message)
+    .addFields([
+      {
+        name: '👤 Utilisateur',
+        value: `${targetUser.username} (${targetUser.id})`,
+        inline: true
+      },
+      {
+        name: '🛡️ Admin',
+        value: interaction.user.username,
+        inline: true
+      }
+    ])
+    .setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+  
+  logger.info(`Admin ${interaction.user.id} revoked battle permission from ${targetUser.id}`);
+}
+
+async function handleListPermissions(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
+  const databaseService = services.get('database');
+  const cacheService = services.get('cache');
+  
+  // Créer le service de permissions
+  const { BattlePermissionService } = await import('../../services/battle/BattlePermissionService');
+  const permissionService = new BattlePermissionService(databaseService, cacheService);
+  
+  const result = await permissionService.listBattlePermissions();
+
+  if (!result.success) {
+    await interaction.editReply(result.message);
+    return;
+  }
+
+  const permissions = result.permissions || [];
+  
+  const embed = new EmbedBuilder()
+    .setTitle('📋 Utilisateurs Autorisés aux Battles')
+    .setColor(0x3498db)
+    .setDescription(
+      permissions.length === 0 
+        ? '🔒 Aucun utilisateur n\'a actuellement la permission de lancer des battles.\n*Seuls les admins peuvent lancer des battles.*'
+        : `🎯 **${permissions.length}** utilisateur(s) autorisé(s) :`
+    );
+
+  if (permissions.length > 0) {
+    const permissionList = permissions.slice(0, 10).map((perm, index) => {
+      const grantedDate = new Date(perm.grantedAt).toLocaleDateString('fr-FR');
+      return `**${index + 1}.** ${perm.username}\n└ 🆔 \`${perm.discordId}\`\n└ 📅 Accordé le ${grantedDate}\n└ 👤 Par <@${perm.grantedBy}>${perm.reason ? `\n└ 📝 *${perm.reason}*` : ''}`;
+    }).join('\n\n');
+
+    embed.setDescription(`🎯 **${permissions.length}** utilisateur(s) autorisé(s) :\n\n${permissionList}`);
+
+    if (permissions.length > 10) {
+      embed.setFooter({ 
+        text: `... et ${permissions.length - 10} autre(s). Utilisez /admin-battle check-permission pour des vérifications spécifiques.` 
+      });
+    }
+  }
+
+  embed.setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleCheckPermission(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
+  const targetUser = interaction.options.getUser('utilisateur') as DiscordUser;
+  
+  const databaseService = services.get('database');
+  const cacheService = services.get('cache');
+  
+  // Créer le service de permissions
+  const { BattlePermissionService } = await import('../../services/battle/BattlePermissionService');
+  const permissionService = new BattlePermissionService(databaseService, cacheService);
+  
+  const canStart = await permissionService.canUserStartBattle(targetUser.id);
+  
+  // Récupérer les détails de la permission si elle existe
+  let permissionDetails = null;
+  if (canStart) {
+    const result = await permissionService.listBattlePermissions();
+    if (result.success && result.permissions) {
+      permissionDetails = result.permissions.find(p => p.discordId === targetUser.id);
+    }
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🔍 Vérification des Permissions`)
+    .setColor(canStart ? 0x00ff00 : 0xff0000)
+    .addFields([
+      {
+        name: '👤 Utilisateur',
+        value: `${targetUser.username}`,
+        inline: true
+      },
+      {
+        name: '🆔 Discord ID',
+        value: `\`${targetUser.id}\``,
+        inline: true
+      },
+      {
+        name: '⚔️ Peut lancer des battles',
+        value: canStart ? '✅ **OUI**' : '❌ **NON**',
+        inline: true
+      }
+    ]);
+
+  if (canStart && permissionDetails) {
+    embed.addFields([
+      {
+        name: '📅 Permission accordée le',
+        value: new Date(permissionDetails.grantedAt).toLocaleDateString('fr-FR'),
+        inline: true
+      },
+      {
+        name: '👤 Accordée par',
+        value: `<@${permissionDetails.grantedBy}>`,
+        inline: true
+      }
+    ]);
+
+    if (permissionDetails.reason) {
+      embed.addFields([{
+        name: '📝 Raison',
+        value: permissionDetails.reason,
+        inline: false
+      }]);
+    }
+  } else if (canStart) {
+    embed.addFields([{
+      name: '🛡️ Type d\'autorisation',
+      value: 'Administrateur',
+      inline: true
+    }]);
+  }
+
+  embed.setTimestamp();
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+// ============ FONCTIONS EXISTANTES (START, FORCE-END, STATUS) ============
+
 async function handleStartBattle(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   // Vérifier qu'il n'y a pas déjà une bataille
   if (currentBattle && currentBattle.status !== 'finished') {
@@ -169,7 +451,6 @@ async function handleStartBattle(interaction: ChatInputCommandInteraction, servi
     return;
   }
 
-  const maxPlayers = interaction.options.getInteger('max-joueurs') || 10;
   const registrationTime = interaction.options.getInteger('temps-inscription') || 10;
   
   const databaseService = services.get('database');
@@ -179,7 +460,8 @@ async function handleStartBattle(interaction: ChatInputCommandInteraction, servi
   const { BattleService } = await import('../../services/battle/BattleService');
   const battleService = new BattleService(databaseService, cacheService);
   
-  const result = await battleService.createBattle(maxPlayers);
+  // Créer la bataille sans limite de joueurs
+  const result = await battleService.createBattle(999);
   
   if (!result.success || !result.battleId) {
     await interaction.editReply('❌ Impossible de créer la bataille !');
@@ -200,10 +482,11 @@ async function handleStartBattle(interaction: ChatInputCommandInteraction, servi
 Dans cette arène digitale impitoyable, seul le mineur le plus malin survivra ! 
 Préparez vos rigs, sharpen vos algos, et que le meilleur geek gagne !
 
-**💻 RÈGLES DU JEU :**
-• **${maxPlayers} slots disponibles** - First come, first served !
-• **Frais d'entrée :** Votre niveau × 5 tokens (min. 10)
-• **Rewards :** 50% au winner, 25% au runner-up, 15% au 3ème
+**💻 NOUVELLES RÈGLES :**
+• **🆓 ENTRÉE GRATUITE** - Plus de frais d'inscription !
+• **♾️ PLACES ILLIMITÉES** - Tout le monde peut participer !
+• **🎁 Récompenses fixes** - Top 5 gagnent des tokens !
+• **🎲 Événements aléatoires** - Apocalypse, résurrections, et plus !
 
 **⏰ INSCRIPTION LIMITÉE :**
 Vous avez **${registrationTime} minutes** pour rejoindre !
@@ -211,13 +494,13 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
     `)
     .addFields([
       {
-        name: '🏆 Prize Pool',
-        value: '0 tokens (augmente avec chaque participant)',
+        name: '🏆 Récompenses',
+        value: '1er: 100 tokens\n2e: 50 tokens\n3e: 25 tokens\n4e: 10 tokens\n5e: 5 tokens',
         inline: true
       },
       {
         name: '👥 Participants',
-        value: `0 / ${maxPlayers}`,
+        value: '5 bots déjà inscrits\n+ joueurs réels',
         inline: true
       },
       {
@@ -227,7 +510,7 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
       }
     ])
     .setImage('https://media.giphy.com/media/26tn33aiTi1jkl6H6/giphy.gif')
-    .setFooter({ text: `Battle ID: ${result.battleId.slice(0, 8)}... | Lancée par ${interaction.user.username}` })
+    .setFooter({ text: `Battle ID: ${result.battleId.slice(0, 8)}... | Lancée par ${interaction.user.username} | 5 bots de test inclus` })
     .setTimestamp();
 
   // Bouton de participation
@@ -257,7 +540,7 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
     id: result.battleId,
     channelId: channel.id,
     messageId: message.id,
-    maxPlayers,
+    maxPlayers: 999, // Pas de limite
     registrationEndTime,
     status: 'registration',
     participants: []
@@ -274,9 +557,10 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
     .setColor(0x00ff00)
     .setDescription(`
 **Battle ID :** \`${result.battleId}\`
-**Participants max :** ${maxPlayers}
+**Participants :** Illimités
 **Temps d'inscription :** ${registrationTime} minutes
 **Status :** En attente de participants
+**Bots de test :** 5 utilisateurs simulés ajoutés
 
 La bataille a été annoncée publiquement !
     `)
@@ -284,7 +568,7 @@ La bataille a été annoncée publiquement !
 
   await interaction.editReply({ embeds: [confirmEmbed] });
   
-  logger.info(`Admin ${interaction.user.id} started battle ${result.battleId}`);
+  logger.info(`Admin ${interaction.user.id} started battle ${result.battleId} with unlimited players`);
 }
 
 async function handleForceEnd(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
@@ -313,7 +597,7 @@ async function handleForceEnd(interaction: ChatInputCommandInteraction, services
       .setDescription(`
 **La bataille a été interrompue par un admin !**
 
-${result.success ? '✅ Tous les participants ont été remboursés.' : '❌ Erreur lors du remboursement.'}
+${result.success ? '✅ Bataille annulée avec succès.' : '❌ Erreur lors de l\'annulation.'}
 
 *"Sometimes the only winning move is not to play..." - WarGames*
       `)
@@ -331,7 +615,7 @@ ${result.success ? '✅ Tous les participants ont été remboursés.' : '❌ Err
     .setColor(0xff0000)
     .setDescription(`
 **Action :** Bataille forcée à terminer
-**Résultat :** ${result.success ? 'Participants remboursés' : 'Échec'}
+**Résultat :** ${result.success ? 'Bataille annulée' : 'Échec'}
 
 ${result.message}
     `)
@@ -367,7 +651,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction) {
       },
       {
         name: '👥 Participants',
-        value: `${currentBattle.participants.length}/${currentBattle.maxPlayers}`,
+        value: `${currentBattle.participants.length} inscrits`,
         inline: true
       },
       {
@@ -414,7 +698,7 @@ async function endRegistrationAndStartBattle(services: Map<string, any>) {
     const { BattleService } = await import('../../services/battle/BattleService');
     const battleService = new BattleService(databaseService, cacheService);
     
-    // Récupérer le client Discord depuis les services (il devrait être disponible via le bot principal)
+    // Récupérer le client Discord depuis les services
     const client = services.get('client') || services.get('discord');
     
     const channel = await client.channels.fetch(currentBattle.channelId) as TextChannel;
@@ -433,7 +717,7 @@ async function endRegistrationAndStartBattle(services: Map<string, any>) {
 Il faut au minimum 2 warriors pour démarrer une bataille.
 *"You can't mine alone in this cruel digital world..."*
 
-Les frais d'inscription ont été remboursés.
+Aucun frais à rembourser (entrée gratuite).
         `)
         .setTimestamp();
 
@@ -455,7 +739,7 @@ Les frais d'inscription ont été remboursés.
 **⚔️ TOUS LES SYSTÈMES SONT PRÊTS !**
 
 Les ${battleInfo.participants} warriors sont connectés au réseau de bataille.
-Cagnotte totale : **${battleInfo.prizePool} tokens**
+Récompenses : Top 5 joueurs gagnent des tokens !
 
 🚨 **DÉMARRAGE DU HACK-A-THON DE LA MORT DANS...**
       `)
@@ -476,7 +760,7 @@ Cagnotte totale : **${battleInfo.prizePool} tokens**
 **⚔️ TOUS LES SYSTÈMES SONT PRÊTS !**
 
 Les ${battleInfo.participants} warriors sont connectés au réseau de bataille.
-Cagnotte totale : **${battleInfo.prizePool} tokens**
+Récompenses : Top 5 joueurs gagnent des tokens !
 
 🚨 **DÉMARRAGE DANS... ${i}**
         `)
@@ -528,15 +812,16 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
       id: entry.id,
       userId: entry.userId,
       username: entry.user.username,
-      eliminated: false
+      eliminated: false,
+      revived: false
     }));
 
-    // Générer des événements de combat épiques
+    // Générer des événements de combat épiques avec événements aléatoires
     let eventCount = 0;
-    const maxEvents = 15 + Math.floor(Math.random() * 10); // 15-25 événements
+    const maxEvents = 20 + Math.floor(Math.random() * 15); // 20-35 événements pour plus de fun
 
     while (participants.filter((p: any) => !p.eliminated).length > 1 && eventCount < maxEvents) {
-      await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 4000)); // 3-7 secondes
+      await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000)); // 2-5 secondes
 
       const alive = participants.filter((p: any) => !p.eliminated);
       if (alive.length <= 1) break;
@@ -544,19 +829,74 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
       const eventType = getRandomEventType();
       let eventMessage = '';
 
-      if (eventType === 'combat') {
+      if (eventType === 'apocalypse') {
+        // 🆕 Événement Apocalypse - Tue plusieurs participants
+        const killCount = Math.floor(alive.length * (0.3 + Math.random() * 0.3)); // 30-60%
+        if (killCount > 0 && alive.length > 2) {
+          const victims = [];
+          for (let i = 0; i < Math.min(killCount, alive.length - 1); i++) {
+            const randomIndex = Math.floor(Math.random() * alive.length);
+            const victim = alive[randomIndex];
+            if (!victim.eliminated) {
+              victim.eliminated = true;
+              victims.push(victim.username);
+              alive.splice(randomIndex, 1);
+            }
+          }
+          
+          if (victims.length > 0) {
+            const apocalypseMsg = MINING_BATTLE_EVENTS.apocalypse[
+              Math.floor(Math.random() * MINING_BATTLE_EVENTS.apocalypse.length)
+            ];
+            eventMessage = `${apocalypseMsg}\n\n💀 **VICTIMES:** ${victims.join(', ')} sont éliminés !`;
+          }
+        }
+      } else if (eventType === 'revival') {
+        // 🆕 Événement Résurrection - Ranime des participants
+        const dead = participants.filter((p: any) => p.eliminated && !p.revived);
+        if (dead.length > 0) {
+          const reviveCount = Math.min(3, Math.floor(Math.random() * 3) + 1);
+          const revived = [];
+          
+          for (let i = 0; i < Math.min(reviveCount, dead.length); i++) {
+            const randomIndex = Math.floor(Math.random() * dead.length);
+            const revivedPlayer = dead[randomIndex];
+            revivedPlayer.eliminated = false;
+            revivedPlayer.revived = true;
+            revived.push(revivedPlayer.username);
+            dead.splice(randomIndex, 1);
+          }
+          
+          if (revived.length > 0) {
+            const revivalMsg = MINING_BATTLE_EVENTS.revival[
+              Math.floor(Math.random() * MINING_BATTLE_EVENTS.revival.length)
+            ];
+            eventMessage = `${revivalMsg}\n\n✨ **RESSUSCITÉS:** ${revived.join(', ')} reviennent dans la bataille !`;
+          }
+        }
+      } else if (eventType === 'boost') {
+        // 🆕 Événement Boost - Boost un joueur
+        const boosted = alive[Math.floor(Math.random() * alive.length)];
+        const boostMsg = MINING_BATTLE_EVENTS.boost[
+          Math.floor(Math.random() * MINING_BATTLE_EVENTS.boost.length)
+        ].replace('{username}', `**${boosted.username}**`);
+        eventMessage = boostMsg;
+      } else {
+        // Combat normal
         const attacker = alive[Math.floor(Math.random() * alive.length)];
         const targets = alive.filter((p: any) => p.userId !== attacker.userId);
+        if (targets.length === 0) break;
+        
         const defender = targets[Math.floor(Math.random() * targets.length)];
 
         const combatStyle = Math.random();
-        if (combatStyle < 0.4) {
+        if (combatStyle < 0.3) {
           // Sérieux
           eventMessage = MINING_BATTLE_EVENTS.combat_serious[
             Math.floor(Math.random() * MINING_BATTLE_EVENTS.combat_serious.length)
           ].replace('{attacker}', `**${attacker.username}**`)
            .replace('{defender}', `**${defender.username}**`);
-        } else if (combatStyle < 0.7) {
+        } else if (combatStyle < 0.6) {
           // Drôle
           eventMessage = MINING_BATTLE_EVENTS.combat_funny[
             Math.floor(Math.random() * MINING_BATTLE_EVENTS.combat_funny.length)
@@ -570,8 +910,8 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
            .replace('{defender}', `**${defender.username}**`);
         }
 
-        // Chance d'élimination (plus probable vers la fin)
-        const eliminationChance = 0.3 + (eventCount / maxEvents) * 0.4;
+        // Chance d'élimination normale (réduite car il y a les événements apocalypse)
+        const eliminationChance = 0.2 + (eventCount / maxEvents) * 0.3;
         if (Math.random() < eliminationChance && alive.length > 2) {
           defender.eliminated = true;
           
@@ -585,9 +925,9 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
 
       if (eventMessage) {
         const embed = new EmbedBuilder()
-          .setColor(0xff6600)
+          .setColor(eventType === 'apocalypse' ? 0xff0000 : eventType === 'revival' ? 0x00ff00 : eventType === 'boost' ? 0xffd700 : 0xff6600)
           .setDescription(eventMessage)
-          .setFooter({ text: `⚔️ ${alive.length} combattants restants` })
+          .setFooter({ text: `⚔️ ${participants.filter((p: any) => !p.eliminated).length} combattants restants | Événement ${eventCount + 1}/${maxEvents}` })
           .setTimestamp();
 
         await channel.send({ embeds: [embed] });
@@ -605,6 +945,9 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
         Math.floor(Math.random() * MINING_BATTLE_EVENTS.victory.length)
       ].replace('{username}', `**${winner.username}**`);
 
+      const finalStats = participants.filter((p: any) => !p.eliminated).length;
+      const totalParticipants = participants.length;
+
       const victoryEmbed = new EmbedBuilder()
         .setTitle('🏆 VICTOIRE ÉPIQUE ! 🏆')
         .setColor(0xffd700)
@@ -613,6 +956,12 @@ ${victoryMessage}
 
 **🎯 BATAILLE TERMINÉE !**
 *"In the matrix of mining, ${winner.username} found the ultimate algorithm..."*
+
+**📊 STATISTIQUES FINALES:**
+• **Total participants:** ${totalParticipants}
+• **Survivants:** ${finalStats}
+• **Événements déclenchés:** ${eventCount}
+• **Ressuscitations:** ${participants.filter((p: any) => p.revived).length}
 
 Les récompenses sont en cours de distribution...
         `)
@@ -630,8 +979,12 @@ Les récompenses sont en cours de distribution...
   }
 }
 
-function getRandomEventType(): 'combat' | 'special' {
-  return Math.random() < 0.8 ? 'combat' : 'special';
+function getRandomEventType(): 'combat' | 'apocalypse' | 'revival' | 'boost' {
+  const rand = Math.random();
+  if (rand < 0.1) return 'apocalypse';      // 10% chance d'apocalypse
+  if (rand < 0.2) return 'revival';         // 10% chance de résurrection  
+  if (rand < 0.35) return 'boost';          // 15% chance de boost
+  return 'combat';                          // 65% combat normal
 }
 
 // Export pour les autres modules

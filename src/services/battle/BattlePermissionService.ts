@@ -211,7 +211,7 @@ export class BattlePermissionService {
       return {
         success: true,
         message: '',
-        permissions: permissions.map(p => ({
+        permissions: permissions.map((p: any) => ({
           id: p.id,
           discordId: p.discordId,
           username: p.username,
