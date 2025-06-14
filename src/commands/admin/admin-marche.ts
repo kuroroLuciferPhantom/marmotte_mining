@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, CommandInteraction, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, CommandInteraction, PermissionFlagsBits, ChatInputCommandInteraction } from 'discord.js';
 import { TokenPriceService, TokenMarketService } from '../../services/token-price';
 import { logger } from '../../utils/logger';
 
@@ -60,12 +60,12 @@ export const data = new SlashCommandBuilder()
       .setName('pump-dump')
       .setDescription('⚠️ Simule un pump and dump (test uniquement)'));
 
-export async function execute(interaction: CommandInteraction) {
+export async function execute(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   try {
     await interaction.deferReply({ ephemeral: true });
 
     const subcommand = interaction.options.getSubcommand();
-    const tokenPriceService = new TokenPriceService();
+    const tokenPriceService = services.get('tokenPriceService') as TokenPriceService;
 
     switch (subcommand) {
       case 'prix':
