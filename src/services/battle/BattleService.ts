@@ -1,8 +1,6 @@
 import { BattleStatus, TransactionType } from '@prisma/client';
-import { DatabaseService } from '../database/DatabaseService';
-import { RedisService } from '../cache/RedisService';
+import { ICacheService } from '../cache/ICacheService';
 import { logger } from '../../utils/logger';
-import { config } from '../../config/config';
 
 interface BattleResult {
   battleId: string;
@@ -26,21 +24,21 @@ interface BattleInfo {
 }
 
 export class BattleService {
-  private database: DatabaseService;
-  private redis: RedisService;
+  private databaseService: any;
+  private cacheService: ICacheService;
   private activeBattles: Map<string, NodeJS.Timeout> = new Map();
 
-  constructor(database: DatabaseService, redis: RedisService) {
-    this.database = database;
-    this.redis = redis;
+  constructor(databaseService: any, cacheService: ICacheService) {
+    this.databaseService = databaseService;
+    this.cacheService = cacheService;
   }
 
   /**
-   * Crée une nouvelle bataille royale
+   * Crée une nouvelle bataille royale avec 5 utilisateurs simulés pour les tests
    */
-  async createBattle(maxPlayers: number = 10): Promise<{ success: boolean; battleId?: string; message: string }> {
+  async createBattle(maxPlayers: number = 999): Promise<{ success: boolean; battleId?: string; message: string }> {
     try {
-      const battle = await this.database.client.battle.create({
+      const battle = await this.databaseService.client.battle.create({
         data: {
           maxPlayers,
           status: BattleStatus.WAITING,
@@ -48,17 +46,22 @@ export class BattleService {
         }
       });
 
-      // Cache la bataille dans Redis
-      await this.redis.hSet(`battle:${battle.id}`, 'status', 'WAITING');
-      await this.redis.hSet(`battle:${battle.id}`, 'participants', '0');
-      await this.redis.hSet(`battle:${battle.id}`, 'maxPlayers', maxPlayers.toString());
+      // Cache la bataille
+      if (this.cacheService && this.cacheService.isHealthy) {
+        await this.cacheService.hSet(`battle:${battle.id}`, 'status', 'WAITING');
+        await this.cacheService.hSet(`battle:${battle.id}`, 'participants', '0');
+        await this.cacheService.hSet(`battle:${battle.id}`, 'maxPlayers', maxPlayers.toString());
+      }
 
-      logger.info(`Created new battle ${battle.id} with max ${maxPlayers} players`);
+      // 🆕 Ajouter 5 utilisateurs simulés pour les tests
+      await this.addSimulatedUsers(battle.id);
+
+      logger.info(`Created new battle ${battle.id} with max ${maxPlayers} players and 5 simulated users`);
       
       return {
         success: true,
         battleId: battle.id,
-        message: `⚔️ Nouvelle bataille créée! ID: ${battle.id}`
+        message: `⚔️ Nouvelle bataille créée! ID: ${battle.id} (avec 5 bots pour test)`
       };
 
     } catch (error) {
@@ -68,20 +71,65 @@ export class BattleService {
   }
 
   /**
-   * Rejoint une bataille
+   * 🆕 Ajoute 5 utilisateurs simulés pour les tests
+   */
+  private async addSimulatedUsers(battleId: string): Promise<void> {
+    const botNames = ['TechNinja', 'CryptoHacker', 'BitcoinMiner', 'HashWarrior', 'QuantumBot'];
+    
+    for (let i = 0; i < botNames.length; i++) {
+      try {
+        const botDiscordId = `bot_${Date.now()}_${i}`;
+        
+        // Créer ou trouver l'utilisateur bot
+        let botUser = await this.databaseService.client.user.findFirst({
+          where: { discordId: botDiscordId }
+        });
+
+        if (!botUser) {
+          botUser = await this.databaseService.client.user.create({
+            data: {
+              discordId: botDiscordId,
+              username: botNames[i],
+              tokens: 1000,
+              dollars: 500
+            }
+          });
+        }
+
+        // Ajouter le bot à la bataille
+        await this.databaseService.client.battleEntry.create({
+          data: {
+            battleId: battleId,
+            userId: botUser.id
+          }
+        });
+
+        logger.info(`Added simulated user ${botNames[i]} to battle ${battleId}`);
+      } catch (error) {
+        logger.warn(`Failed to add simulated user ${botNames[i]}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Rejoint une bataille - CORRIGÉ avec messages d'erreur précis et sans frais
    */
   async joinBattle(userId: string, battleId?: string): Promise<{ success: boolean; message: string; battleInfo?: BattleInfo }> {
     try {
-      const user = await this.database.client.user.findUnique({
+      // 1. Vérifier que l'utilisateur existe
+      const user = await this.databaseService.client.user.findUnique({
         where: { id: userId }
       });
 
       if (!user) {
-        return { success: false, message: 'Utilisateur non trouvé' };
+        return { 
+          success: false, 
+          message: '❌ **Utilisateur non trouvé**\nVotre profil n\'existe pas dans la base de données. Utilisez une commande comme `/profile` pour créer votre compte.' 
+        };
       }
 
-      // Vérifie le cooldown
-      const lastBattle = await this.database.client.battleEntry.findFirst({
+      // 2. Vérifier le cooldown
+      const lastBattle = await this.databaseService.client.battleEntry.findFirst({
         where: { userId },
         orderBy: { joinedAt: 'desc' },
         include: { battle: true }
@@ -89,53 +137,56 @@ export class BattleService {
 
       if (lastBattle) {
         const timeSinceLastBattle = Date.now() - lastBattle.joinedAt.getTime();
-        const cooldownTime = config.game.battleCooldown * 1000;
+        const cooldownTime = 300 * 1000; // 5 minutes en ms
         
         if (timeSinceLastBattle < cooldownTime) {
           const remainingTime = Math.ceil((cooldownTime - timeSinceLastBattle) / 1000 / 60);
           return { 
             success: false, 
-            message: `⏰ Vous devez attendre ${remainingTime} minutes avant de rejoindre une autre bataille` 
+            message: `⏰ **Cooldown actif**\nVous devez attendre encore **${remainingTime} minute(s)** avant de rejoindre une autre bataille.` 
           };
         }
       }
 
-      // Trouve une bataille disponible
+      // 3. Trouve une bataille disponible
       let battle;
       if (battleId) {
-        battle = await this.database.client.battle.findUnique({
+        battle = await this.databaseService.client.battle.findUnique({
           where: { id: battleId },
           include: { entries: true }
         });
+
+        if (!battle) {
+          return { 
+            success: false, 
+            message: '❌ **Bataille introuvable**\nLa bataille spécifiée n\'existe pas ou a été supprimée.' 
+          };
+        }
       } else {
-        battle = await this.database.client.battle.findFirst({
+        battle = await this.databaseService.client.battle.findFirst({
           where: { status: BattleStatus.WAITING },
           include: { entries: true },
           orderBy: { createdAt: 'asc' }
         });
 
         if (!battle) {
-          const createResult = await this.createBattle();
-          if (!createResult.success || !createResult.battleId) {
-            return { success: false, message: 'Impossible de créer une bataille' };
-          }
-          
-          battle = await this.database.client.battle.findUnique({
-            where: { id: createResult.battleId },
-            include: { entries: true }
-          });
+          return { 
+            success: false, 
+            message: '❌ **Aucune bataille disponible**\nIl n\'y a actuellement aucune bataille en cours d\'inscription.' 
+          };
         }
       }
 
-      if (!battle) {
-        return { success: false, message: 'Aucune bataille disponible' };
+      // 4. Vérifier le statut de la bataille
+      if (battle.status !== BattleStatus.WAITING) {
+        return { 
+          success: false, 
+          message: '❌ **Bataille non disponible**\nCette bataille est déjà commencée ou terminée.' 
+        };
       }
 
-      if (battle.entries.length >= battle.maxPlayers) {
-        return { success: false, message: 'Cette bataille est complète' };
-      }
-
-      const existingEntry = await this.database.client.battleEntry.findUnique({
+      // 5. Vérifier si déjà participant
+      const existingEntry = await this.databaseService.client.battleEntry.findUnique({
         where: { 
           battleId_userId: { 
             battleId: battle.id, 
@@ -145,48 +196,21 @@ export class BattleService {
       });
 
       if (existingEntry) {
-        return { success: false, message: 'Vous êtes déjà dans cette bataille' };
-      }
-
-      const entryFee = Math.max(10, user.level * 5);
-      
-      if (user.tokens < entryFee) {
         return { 
           success: false, 
-          message: `Fonds insuffisants! Frais d'entrée: ${entryFee} tokens` 
+          message: '❌ **Déjà inscrit**\nVous participez déjà à cette bataille !' 
         };
       }
 
-      // Transaction pour rejoindre
-      await this.database.client.$transaction(async (tx) => {
-        await tx.user.update({
-          where: { id: userId },
-          data: { tokens: { decrement: entryFee } }
-        });
-
-        await tx.battleEntry.create({
-          data: {
-            battleId: battle.id,
-            userId
-          }
-        });
-
-        await tx.battle.update({
-          where: { id: battle.id },
-          data: { prizePool: { increment: entryFee } }
-        });
-
-        await tx.transaction.create({
-          data: {
-            userId,
-            type: TransactionType.BATTLE_ENTRY,
-            amount: -entryFee,
-            description: `Participation bataille ${battle.id}`
-          }
-        });
+      // 6. 🆕 PLUS DE FRAIS D'ENTRÉE - Rejoindre directement
+      await this.databaseService.client.battleEntry.create({
+        data: {
+          battleId: battle.id,
+          userId
+        }
       });
 
-      const updatedBattle = await this.database.client.battle.findUnique({
+      const updatedBattle = await this.databaseService.client.battle.findUnique({
         where: { id: battle.id },
         include: { entries: true }
       });
@@ -196,26 +220,23 @@ export class BattleService {
         status: battle.status,
         participants: (updatedBattle?.entries.length || 0),
         maxPlayers: battle.maxPlayers,
-        prizePool: battle.prizePool + entryFee
+        prizePool: battle.prizePool
       };
 
-      // Démarre si pleine
-      if (updatedBattle && updatedBattle.entries.length >= battle.maxPlayers) {
-        await this.startBattle(battle.id);
-        battleInfo.status = BattleStatus.ACTIVE;
-      }
-
-      logger.info(`User ${userId} joined battle ${battle.id}`);
+      logger.info(`User ${userId} joined battle ${battle.id} - FREE ENTRY`);
       
       return {
         success: true,
-        message: `⚔️ Vous avez rejoint la bataille! Frais: ${entryFee} tokens`,
+        message: `✅ **Bataille rejointe !**\nVous participez maintenant à la bataille royale. **Entrée gratuite !**\n👥 Participants: ${battleInfo.participants}`,
         battleInfo
       };
 
     } catch (error) {
       logger.error('Error joining battle:', error);
-      return { success: false, message: 'Erreur lors de la participation à la bataille' };
+      return { 
+        success: false, 
+        message: '❌ **Erreur système**\nUne erreur technique s\'est produite. Veuillez réessayer dans quelques instants.' 
+      };
     }
   }
 
@@ -224,7 +245,7 @@ export class BattleService {
    */
   private async startBattle(battleId: string): Promise<void> {
     try {
-      await this.database.client.battle.update({
+      await this.databaseService.client.battle.update({
         where: { id: battleId },
         data: {
           status: BattleStatus.ACTIVE,
@@ -232,7 +253,9 @@ export class BattleService {
         }
       });
 
-      await this.redis.hSet(`battle:${battleId}`, 'status', 'ACTIVE');
+      if (this.cacheService && this.cacheService.isHealthy) {
+        await this.cacheService.hSet(`battle:${battleId}`, 'status', 'ACTIVE');
+      }
 
       // Programme la fin de la bataille (durée aléatoire entre 2-5 minutes)
       const battleDuration = (120 + Math.random() * 180) * 1000; // 2-5 minutes en ms
@@ -252,11 +275,11 @@ export class BattleService {
   }
 
   /**
-   * Termine une bataille et distribue les récompenses
+   * 🆕 Termine une bataille avec événements aléatoires améliorés
    */
   private async endBattle(battleId: string): Promise<BattleResult | null> {
     try {
-      const battle = await this.database.client.battle.findUnique({
+      const battle = await this.databaseService.client.battle.findUnique({
         where: { id: battleId },
         include: { entries: { include: { user: true } } }
       });
@@ -265,11 +288,11 @@ export class BattleService {
         return null;
       }
 
-      // Simule le combat en randomisant les positions basées sur les stats des joueurs
-      const participants = await this.simulateBattle(battle.entries);
+      // 🆕 Simule le combat avec événements aléatoires
+      const participants = await this.simulateEnhancedBattle(battle.entries);
 
       // Met à jour la bataille
-      await this.database.client.battle.update({
+      await this.databaseService.client.battle.update({
         where: { id: battleId },
         data: {
           status: BattleStatus.FINISHED,
@@ -278,13 +301,13 @@ export class BattleService {
         }
       });
 
-      // Distribue les récompenses
-      const rewards = this.calculateRewards(battle.prizePool, participants.length);
+      // 🆕 Distribue des récompenses symboliques (pas de frais d'entrée)
+      const rewards = this.calculateSymbolicRewards(participants.length);
       const result: BattleResult = {
         battleId,
         winnerId: participants[0].userId,
         participants: [],
-        prizePool: battle.prizePool
+        prizePool: 0 // Plus de prize pool
       };
 
       for (let i = 0; i < participants.length; i++) {
@@ -293,7 +316,7 @@ export class BattleService {
         const position = i + 1;
 
         // Met à jour l'entrée de bataille
-        await this.database.client.battleEntry.update({
+        await this.databaseService.client.battleEntry.update({
           where: { id: participant.id },
           data: {
             position,
@@ -304,16 +327,14 @@ export class BattleService {
 
         if (reward > 0) {
           // Donne la récompense
-          await this.database.client.user.update({
+          await this.databaseService.client.user.update({
             where: { id: participant.userId },
             data: { 
-              tokens: { increment: reward },
-              battlesWon: position === 1 ? { increment: 1 } : undefined,
-              battlesLost: position > 1 ? { increment: 1 } : undefined
+              tokens: { increment: reward }
             }
           });
 
-          await this.database.client.transaction.create({
+          await this.databaseService.client.transaction.create({
             data: {
               userId: participant.userId,
               type: TransactionType.BATTLE_REWARD,
@@ -321,14 +342,6 @@ export class BattleService {
               description: `Récompense bataille - Position ${position}`
             }
           });
-
-          // Met à jour le leaderboard
-          const updatedUser = await this.database.client.user.findUnique({
-            where: { id: participant.userId }
-          });
-          if (updatedUser) {
-            await this.redis.addToLeaderboard(participant.userId, updatedUser.tokens);
-          }
         }
 
         result.participants.push({
@@ -338,8 +351,10 @@ export class BattleService {
         });
       }
 
-      // Nettoie Redis
-      await this.redis.del(`battle:${battleId}`);
+      // Nettoie le cache
+      if (this.cacheService && this.cacheService.isHealthy) {
+        await this.cacheService.del(`battle:${battleId}`);
+      }
 
       logger.info(`Battle ${battleId} ended, winner: ${participants[0].userId}`);
       return result;
@@ -351,48 +366,118 @@ export class BattleService {
   }
 
   /**
-   * Simule le déroulement d'une bataille
+   * 🆕 Simulation de bataille améliorée avec événements aléatoires
    */
-  private async simulateBattle(entries: any[]): Promise<any[]> {
-    // Calcule un score pour chaque participant basé sur leurs stats
-    const participantsWithScores = await Promise.all(
-      entries.map(async (entry) => {
-        const user = entry.user;
-        
-        // Facteurs influençant le combat
-        const levelFactor = user.level * 10;
-        const experienceFactor = user.experience * 0.01;
-        const tokensFactor = Math.log(Math.max(1, user.tokens)) * 5;
-        const randomFactor = Math.random() * 50; // Élément de chance
+  private async simulateEnhancedBattle(entries: any[]): Promise<any[]> {
+    let participants = entries.map(entry => ({
+      ...entry,
+      eliminated: false,
+      revived: false,
+      battleScore: 0
+    }));
 
-        const totalScore = levelFactor + experienceFactor + tokensFactor + randomFactor;
-        
-        return {
-          ...entry,
-          battleScore: totalScore
-        };
-      })
-    );
+    // Événements aléatoires pendant la bataille
+    const eventCount = Math.floor(Math.random() * 3) + 1; // 1-3 événements
+    
+    for (let i = 0; i < eventCount; i++) {
+      const eventType = Math.random();
+      
+      if (eventType < 0.3) {
+        // 🆕 Événement "Apocalypse" - Tue 30-50% des participants
+        await this.triggerApocalypseEvent(participants);
+      } else if (eventType < 0.6) {
+        // 🆕 Événement "Résurrection" - Ranime 1-3 participants
+        await this.triggerRevivalEvent(participants);
+      } else {
+        // Événement normal - Boost aléatoire
+        await this.triggerBoostEvent(participants);
+      }
+    }
+
+    // Calcule les scores finaux
+    for (const participant of participants) {
+      const user = participant.user;
+      
+      // Facteurs influençant le combat
+      const levelFactor = (user.level || 1) * 10;
+      const tokensFactor = Math.log(Math.max(1, user.tokens || 1)) * 5;
+      const randomFactor = Math.random() * 50; // Élément de chance
+      const revivalPenalty = participant.revived ? -20 : 0; // Malus si ressuscité
+      
+      participant.battleScore = levelFactor + tokensFactor + randomFactor + revivalPenalty;
+    }
 
     // Trie par score décroissant (meilleur score = meilleure position)
-    return participantsWithScores.sort((a, b) => b.battleScore - a.battleScore);
+    return participants
+      .filter(p => !p.eliminated)
+      .sort((a, b) => b.battleScore - a.battleScore)
+      .concat(participants.filter(p => p.eliminated));
   }
 
   /**
-   * Calcule les récompenses selon les positions
+   * 🆕 Événement Apocalypse - Tue une partie des participants
    */
-  private calculateRewards(prizePool: number, totalParticipants: number): number[] {
+  private async triggerApocalypseEvent(participants: any[]): Promise<void> {
+    const alive = participants.filter(p => !p.eliminated);
+    if (alive.length <= 2) return; // Garde au moins 2 survivants
+    
+    const killCount = Math.floor(alive.length * (0.3 + Math.random() * 0.2)); // 30-50%
+    
+    for (let i = 0; i < killCount; i++) {
+      const randomIndex = Math.floor(Math.random() * alive.length);
+      const victim = alive[randomIndex];
+      victim.eliminated = true;
+      alive.splice(randomIndex, 1);
+    }
+    
+    logger.info(`🌋 Apocalypse Event: ${killCount} participants eliminated`);
+  }
+
+  /**
+   * 🆕 Événement Résurrection - Ranime des participants
+   */
+  private async triggerRevivalEvent(participants: any[]): Promise<void> {
+    const dead = participants.filter(p => p.eliminated && !p.revived);
+    if (dead.length === 0) return;
+    
+    const reviveCount = Math.min(3, Math.floor(Math.random() * 3) + 1); // 1-3 participants
+    
+    for (let i = 0; i < Math.min(reviveCount, dead.length); i++) {
+      const randomIndex = Math.floor(Math.random() * dead.length);
+      const revived = dead[randomIndex];
+      revived.eliminated = false;
+      revived.revived = true;
+      dead.splice(randomIndex, 1);
+    }
+    
+    logger.info(`✨ Revival Event: ${Math.min(reviveCount, dead.length)} participants revived`);
+  }
+
+  /**
+   * 🆕 Événement Boost - Boost aléatoire
+   */
+  private async triggerBoostEvent(participants: any[]): Promise<void> {
+    const alive = participants.filter(p => !p.eliminated);
+    if (alive.length === 0) return;
+    
+    const boosted = alive[Math.floor(Math.random() * alive.length)];
+    boosted.battleScore = (boosted.battleScore || 0) + 30;
+    
+    logger.info(`🚀 Boost Event: ${boosted.user.username} received power boost`);
+  }
+
+  /**
+   * 🆕 Calcule des récompenses symboliques (plus de frais d'entrée)
+   */
+  private calculateSymbolicRewards(totalParticipants: number): number[] {
     const rewards: number[] = [];
     
-    // Distribution des récompenses: 
-    // 1er: 50%, 2e: 25%, 3e: 15%, 4e-6e: 3.33% chacun, autres: 0
-    const distribution = [0.5, 0.25, 0.15];
+    // Récompenses fixes pour encourager la participation
+    const baseRewards = [100, 50, 25, 10, 5]; // Top 5 gagnent des tokens
     
     for (let i = 0; i < totalParticipants; i++) {
-      if (i < 3) {
-        rewards.push(Math.floor(prizePool * distribution[i]));
-      } else if (i < 6) {
-        rewards.push(Math.floor(prizePool * 0.0333));
+      if (i < baseRewards.length) {
+        rewards.push(baseRewards[i]);
       } else {
         rewards.push(0);
       }
@@ -406,7 +491,7 @@ export class BattleService {
    */
   async getBattleInfo(battleId: string): Promise<BattleInfo | null> {
     try {
-      const battle = await this.database.client.battle.findUnique({
+      const battle = await this.databaseService.client.battle.findUnique({
         where: { id: battleId },
         include: { entries: true }
       });
@@ -436,7 +521,7 @@ export class BattleService {
    */
   async getActiveBattles(): Promise<BattleInfo[]> {
     try {
-      const battles = await this.database.client.battle.findMany({
+      const battles = await this.databaseService.client.battle.findMany({
         where: {
           status: {
             in: [BattleStatus.WAITING, BattleStatus.ACTIVE]
@@ -467,7 +552,7 @@ export class BattleService {
    */
   async getUserBattleHistory(userId: string, limit: number = 10): Promise<any[]> {
     try {
-      const entries = await this.database.client.battleEntry.findMany({
+      const entries = await this.databaseService.client.battleEntry.findMany({
         where: { userId },
         include: { battle: true },
         orderBy: { joinedAt: 'desc' },
@@ -496,7 +581,7 @@ export class BattleService {
     try {
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
       
-      await this.database.client.battle.deleteMany({
+      await this.databaseService.client.battle.deleteMany({
         where: {
           status: BattleStatus.FINISHED,
           endTime: {
@@ -517,7 +602,7 @@ export class BattleService {
    */
   async cancelBattle(battleId: string): Promise<{ success: boolean; message: string }> {
     try {
-      const battle = await this.database.client.battle.findUnique({
+      const battle = await this.databaseService.client.battle.findUnique({
         where: { id: battleId },
         include: { entries: { include: { user: true } } }
       });
@@ -530,38 +615,23 @@ export class BattleService {
         return { success: false, message: 'Seules les batailles en attente peuvent être annulées' };
       }
 
-      // Rembourse tous les participants
-      for (const entry of battle.entries) {
-        const entryFee = Math.max(10, entry.user.level * 5);
-        
-        await this.database.client.user.update({
-          where: { id: entry.userId },
-          data: { tokens: { increment: entryFee } }
-        });
-
-        await this.database.client.transaction.create({
-          data: {
-            userId: entry.userId,
-            type: TransactionType.BATTLE_REWARD,
-            amount: entryFee,
-            description: `Remboursement bataille annulée ${battleId}`
-          }
-        });
-      }
-
+      // 🆕 Plus besoin de remboursement car plus de frais d'entrée
+      
       // Marque la bataille comme annulée
-      await this.database.client.battle.update({
+      await this.databaseService.client.battle.update({
         where: { id: battleId },
         data: { status: BattleStatus.CANCELLED }
       });
 
-      await this.redis.del(`battle:${battleId}`);
+      if (this.cacheService && this.cacheService.isHealthy) {
+        await this.cacheService.del(`battle:${battleId}`);
+      }
 
-      logger.info(`Battle ${battleId} cancelled and participants refunded`);
+      logger.info(`Battle ${battleId} cancelled`);
       
       return { 
         success: true, 
-        message: 'Bataille annulée et participants remboursés' 
+        message: 'Bataille annulée avec succès' 
       };
 
     } catch (error) {
