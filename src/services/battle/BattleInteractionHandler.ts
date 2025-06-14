@@ -1,16 +1,14 @@
-import { ButtonInteraction, EmbedBuilder } from 'discord.js';
-import { DatabaseService } from '../database/DatabaseService';
-import { BattleService } from './BattleService';
-import { currentBattle } from '../../commands/admin/admin-battle';
+import { ButtonInteraction, EmbedBuilder, TextChannel } from 'discord.js';
 import { logger } from '../../utils/logger';
+import { currentBattle } from '../../commands/admin/admin-battle';
 
 export class BattleInteractionHandler {
-  private databaseService: DatabaseService;
-  private battleService: BattleService;
+  private databaseService: any;
+  private cacheService: any;
 
-  constructor(databaseService: DatabaseService, cacheService: any) {
+  constructor(databaseService: any, cacheService: any) {
     this.databaseService = databaseService;
-    this.battleService = new BattleService(databaseService, cacheService);
+    this.cacheService = cacheService;
   }
 
   async handleBattleInteraction(interaction: ButtonInteraction): Promise<void> {
@@ -18,7 +16,7 @@ export class BattleInteractionHandler {
 
     try {
       // Assurer que l'utilisateur existe en base
-      await this.databaseService.ensureUserExists(interaction.user.id, interaction.user.username);
+      await this.ensureUserExists(interaction.user.id, interaction.user.username);
 
       if (customId.startsWith('join_battle_')) {
         await this.handleJoinButton(interaction);
@@ -45,6 +43,32 @@ export class BattleInteractionHandler {
       } else {
         await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
       }
+    }
+  }
+
+  // Fonction adaptée pour créer/vérifier l'utilisateur
+  private async ensureUserExists(discordId: string, username: string) {
+    try {
+      let user = await this.databaseService.client.user.findUnique({
+        where: { discordId }
+      });
+
+      if (!user) {
+        user = await this.databaseService.client.user.create({
+          data: {
+            discordId,
+            username,
+            tokens: 100.0,
+            dollars: 0.0
+          }
+        });
+        logger.info(`Created new user: ${username} (${discordId})`);
+      }
+
+      return user;
+    } catch (error) {
+      logger.error('Error ensuring user exists:', error);
+      throw error;
     }
   }
 
@@ -100,8 +124,12 @@ export class BattleInteractionHandler {
       return;
     }
 
+    // Créer le BattleService dynamiquement
+    const { BattleService } = await import('./BattleService');
+    const battleService = new BattleService(this.databaseService, this.cacheService);
+
     // Tenter de rejoindre
-    const result = await this.battleService.joinBattle(interaction.user.id, battleId);
+    const result = await battleService.joinBattle(interaction.user.id, battleId);
 
     if (!result.success) {
       const failEmbed = new EmbedBuilder()
@@ -179,18 +207,20 @@ Entry fee paid: **${entryFee} tokens**
 
     // Annoncer dans le canal principal
     try {
-      const channel = interaction.channel;
-      if (channel?.isTextBased()) {
+      const channel = await interaction.client.channels.fetch(currentBattle.channelId);
+      if (channel && 'send' in channel) {
+        const textChannel = channel as TextChannel;
+        
         const announceEmbed = new EmbedBuilder()
           .setColor(0x00ff00)
           .setDescription(`${entryMessage}\n\n*A new warrior enters the digital battlefield !*`)
           .setFooter({ text: `${currentBattle.participants.length}/${currentBattle.maxPlayers} participants` })
           .setTimestamp();
 
-        await channel.send({ embeds: [announceEmbed] });
+        await textChannel.send({ embeds: [announceEmbed] });
 
         // Mettre à jour le message principal
-        const originalMessage = await channel.messages.fetch(currentBattle.messageId);
+        const originalMessage = await textChannel.messages.fetch(currentBattle.messageId);
         if (originalMessage && originalMessage.embeds[0]) {
           const updatedEmbed = new EmbedBuilder(originalMessage.embeds[0].toJSON())
             .setFields(
@@ -237,7 +267,11 @@ Entry fee paid: **${entryFee} tokens**
       return;
     }
 
-    const battleInfo = await this.battleService.getBattleInfo(battleId);
+    // Créer le BattleService dynamiquement
+    const { BattleService } = await import('./BattleService');
+    const battleService = new BattleService(this.databaseService, this.cacheService);
+    
+    const battleInfo = await battleService.getBattleInfo(battleId);
     
     if (!battleInfo) {
       await interaction.editReply('❌ Impossible de récupérer les informations de bataille !');
@@ -351,7 +385,7 @@ Entry fee paid: **${entryFee} tokens**
 // Fonction utilitaire pour l'import depuis le CommandManager
 export async function handleBattleButtonInteraction(
   interaction: ButtonInteraction,
-  databaseService: DatabaseService,
+  databaseService: any,
   cacheService: any
 ): Promise<void> {
   const handler = new BattleInteractionHandler(databaseService, cacheService);
