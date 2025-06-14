@@ -166,6 +166,7 @@ model User {
   housingHistory      HousingHistory[]
   rentPayments        RentPayment[]
   dailyStats          DailyStats[]
+  battlePermissions   BattlePermission[]
   
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -287,6 +288,25 @@ model BattleEntry {
 
   @@unique([battleId, userId])
   @@map("battle_entries")
+}
+
+// ============ NOUVEAU MODÈLE POUR LES PERMISSIONS DE BATTLE ============
+
+model BattlePermission {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  discordId   String   // ID Discord de l'utilisateur
+  username    String   // Nom d'utilisateur pour affichage
+  grantedBy   String   // ID Discord de l'admin qui a accordé la permission
+  grantedAt   DateTime @default(now())
+  isActive    Boolean  @default(true)
+  reason      String?  // Raison optionnelle pour l'octroi de la permission
+  
+  @@unique([discordId])
+  @@index([discordId])
+  @@index([isActive])
+  @@map("battle_permissions")
 }
 
 model TokenPrice {
