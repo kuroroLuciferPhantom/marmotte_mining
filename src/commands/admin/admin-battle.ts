@@ -359,7 +359,7 @@ ${result.success ? '✅' : '❌'} ${result.message}
 }
 
 async function handleSetModerator(interaction: CommandInteraction, databaseService: DatabaseService) {
-  const targetUser = interaction.options.getUser('user');
+  const targetUser = interaction.options.get('user')?.user;
   
   if (!targetUser) {
     await interaction.editReply('❌ Utilisateur non trouvé !');
