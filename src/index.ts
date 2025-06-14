@@ -1,4 +1,4 @@
-// src/index.ts - Version corrigée avec interface commune
+// src/index.ts - Version finale avec services token intégrés
 import { Client, GatewayIntentBits, Collection } from 'discord.js';
 import { config } from './config/config';
 import { logger } from './utils/logger';
@@ -9,7 +9,11 @@ import { ActivityService } from './services/activity/ActivityService';
 import { SabotageService } from './services/sabotage/SabotageService';
 import { CardService } from './services/sabotage/CardService';
 import { BlackMarketService } from './services/sabotage/BlackMarketService';
+import { TokenPriceService } from './services/token-price/TokenPriceService';
+import { TokenMarketService } from './services/token-price/TokenMarketService';
 import { CommandManager } from './managers/CommandManager';
+
+// Import de l'interface et du mock
 import { ICacheService } from './services/cache/ICacheService';
 import { MockCacheService } from './services/cache/MockCacheService';
 
@@ -21,6 +25,7 @@ class MarmotteMiningBot {
   private cleanupInterval?: NodeJS.Timeout;
   private marketRefreshInterval?: NodeJS.Timeout;
   private energyRegenInterval?: NodeJS.Timeout;
+  private tokenPriceInterval?: NodeJS.Timeout;
 
   constructor() {
     this.client = new Client({
@@ -29,6 +34,7 @@ class MarmotteMiningBot {
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
         GatewayIntentBits.MessageContent
+        // ❌ Supprimé: GatewayIntentBits.GuildVoiceStates
       ]
     });
 
@@ -62,51 +68,37 @@ class MarmotteMiningBot {
     const databaseService = new DatabaseService();
     await databaseService.connect();
     this.services.set('database', databaseService);
-
-    // Cache Service - Essayer Redis, sinon fallback vers Mock
-    let cacheService: ICacheService;
     
-    try {
-      logger.info('🔄 Attempting to connect to Redis...');
-      
-      // Tentative de connexion Redis avec timeout
-      const { RedisService } = await import('./services/cache/RedisService');
-      const redisService = new RedisService();
-      
-      const connectPromise = redisService.connect();
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Redis connection timeout')), 10000)
-      );
-      
-      await Promise.race([connectPromise, timeoutPromise]);
-      
-      cacheService = redisService;
-      logger.info('✅ Redis connected successfully');
-      
-    } catch (error) {
-      logger.warn('⚠️ Redis connection failed, using in-memory cache instead');
-      logger.debug('Redis error details:', error.message);
-      
-      cacheService = new MockCacheService();
-      await cacheService.connect();
-      
-      // Démarrer le nettoyage pour le mock
-      if (cacheService instanceof MockCacheService) {
-        cacheService.startCleanupInterval();
-      }
-    }
+    // Cache Service - Utilisation du MockCacheService (Redis désactivé)
+    let cacheService: ICacheService;
+
+    logger.info('📦 Using in-memory cache (Redis disabled for now)');
+    cacheService = new MockCacheService();
+    await cacheService.connect();
     
     this.services.set('cache', cacheService);
 
-    // Core services - Maintenant avec l'interface ICacheService
+    // Core services
     const activityService = new ActivityService(databaseService);
     this.services.set('activity', activityService);
 
-    const miningService = new MiningService(databaseService, cacheService);
+    const miningService = new MiningService(databaseService, cacheService as any);
     this.services.set('mining', miningService);
 
-    const battleService = new BattleService(databaseService, cacheService);
+    const battleService = new BattleService(databaseService, cacheService as any);
     this.services.set('battle', battleService);
+
+    // 🆕 Token services - Maintenant corrigés
+    const tokenPriceService = new TokenPriceService(databaseService, cacheService);
+    this.services.set('tokenPrice', tokenPriceService);
+
+    const tokenMarketService = new TokenMarketService(
+      this.client, 
+      databaseService, 
+      cacheService
+      // config.discord.marketChannelId // Optionnel - à configurer plus tard
+    );
+    this.services.set('tokenMarket', tokenMarketService);
 
     // PvP services
     const sabotageService = new SabotageService(databaseService.client);
@@ -140,6 +132,7 @@ class MarmotteMiningBot {
       logger.info(`🎮 Bot is ready and serving ${this.client.guilds.cache.size} servers`);
       logger.info('💡 Send messages to earn dollars automatically!');
       logger.info('💰 Use /salaire every week to get your salary!');
+      logger.info('📊 Token market monitoring active!');
       logger.info('🎯 Try these commands: /profile, /balance, /salaire, /help');
     });
 
@@ -160,7 +153,7 @@ class MarmotteMiningBot {
             // Ignore reaction errors (permissions, etc.)
           }
         }
-      } catch (error) {
+      } catch (error: any) {
         logger.error('Error processing message reward:', error.message);
       }
     });
@@ -176,7 +169,7 @@ class MarmotteMiningBot {
         if (reward && reward.amount > 0) {
           logger.info(`💰 ${user.tag} earned ${reward.amount.toFixed(2)}$ for reaction`);
         }
-      } catch (error) {
+      } catch (error: any) {
         logger.error('Error processing reaction reward:', error.message);
       }
     });
@@ -225,7 +218,17 @@ class MarmotteMiningBot {
       }
     }, 60 * 60 * 1000);
 
-    // 🆕 Rappel hebdomadaire pour le salaire
+    // 🆕 Surveillance des prix tokens (toutes les 2 minutes)
+    this.tokenPriceInterval = setInterval(async () => {
+      try {
+        const tokenMarketService = this.getService<TokenMarketService>('tokenMarket');
+        await tokenMarketService.startMarketMonitoring();
+      } catch (error) {
+        logger.error('Error in token price monitoring:', error);
+      }
+    }, 2 * 60 * 1000);
+
+    // Rappel hebdomadaire pour le salaire
     this.scheduleWeeklySalaryReminder();
 
     // Nettoyage quotidien
@@ -233,6 +236,7 @@ class MarmotteMiningBot {
 
     logger.info('⏰ Periodic tasks scheduled');
     logger.info('💰 Weekly salary reminders activated');
+    logger.info('📊 Token market monitoring activated');
   }
 
   private scheduleWeeklySalaryReminder(): void {
@@ -246,6 +250,12 @@ class MarmotteMiningBot {
     setTimeout(async () => {
       try {
         logger.info('💰 Weekly salary reminder: notifications sent');
+        
+        // Ici on pourrait envoyer des notifications dans le canal général
+        // const generalChannel = this.client.channels.cache.get(config.discord.generalChannelId);
+        // if (generalChannel) {
+        //   await generalChannel.send('💰 **Rappel** : N\'oubliez pas de récupérer votre salaire hebdomadaire avec `/salaire` !');
+        // }
         
         // Reprogrammer pour la semaine suivante
         this.scheduleWeeklySalaryReminder();
@@ -297,6 +307,7 @@ class MarmotteMiningBot {
       if (this.cleanupInterval) clearInterval(this.cleanupInterval);
       if (this.marketRefreshInterval) clearInterval(this.marketRefreshInterval);
       if (this.energyRegenInterval) clearInterval(this.energyRegenInterval);
+      if (this.tokenPriceInterval) clearInterval(this.tokenPriceInterval);
 
       const database = this.services.get('database');
       if (database) {

@@ -1,81 +1,71 @@
-import { createClient, RedisClientType } from 'redis';
-import { config } from '../../config/config';
+// src/services/cache/RedisService.ts - Version simplifiée et fonctionnelle
+import Redis from 'ioredis';
 import { logger } from '../../utils/logger';
+import { config } from '../../config/config';
+import { ICacheService } from './ICacheService';
 
-export class RedisService {
-  private client: RedisClientType;
-  private isConnected: boolean = false;
-  private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 5;
+export class RedisService implements ICacheService {
+  public readonly client: Redis;
+  private _isConnected: boolean = false;
+  private _reconnectAttempts: number = 0;
+  private readonly _maxReconnectAttempts: number = 5;
 
   constructor() {
-    // Configuration spéciale pour Upstash
-    this.client = createClient({
-      url: config.redis.url,
-      socket: {
-        keepAlive: true,
-        reconnectStrategy: (retries) => {
-          this.reconnectAttempts = retries;
-          if (retries > this.maxReconnectAttempts) {
-            logger.error(`Redis: Max reconnect attempts (${this.maxReconnectAttempts}) reached`);
-            return false; // Stop reconnecting
-          }
-          const delay = Math.min(retries * 1000, 5000); // Max 5 seconds
-          logger.warn(`Redis: Reconnecting in ${delay}ms (attempt ${retries})`);
-          return delay;
-        },
-        connectTimeout: 30000, // 30 seconds
-        commandTimeout: 10000,  // 10 seconds
-        lazyConnect: false
-      },
-      // Upstash specific settings
-      disableOfflineQueue: false
-    });
-
+    // Configuration simplifiée qui fonctionne
+    this.client = new Redis(config.redis.url);
     this.setupEventListeners();
+  }
+
+  get isHealthy(): boolean {
+    return this.client.status === 'ready';
+  }
+
+  get isConnected(): boolean {
+    return this._isConnected;
+  }
+
+  get reconnectAttempts(): number {
+    return this._reconnectAttempts;
+  }
+
+  get maxReconnectAttempts(): number {
+    return this._maxReconnectAttempts;
   }
 
   private setupEventListeners(): void {
     this.client.on('connect', () => {
-      logger.info('🔗 Redis connecting...');
+      logger.info('✅ Redis connected');
+      this._isConnected = true;
     });
 
     this.client.on('ready', () => {
-      logger.info('✅ Redis ready and authenticated');
-      this.isConnected = true;
-      this.reconnectAttempts = 0; // Reset counter on successful connection
+      logger.info('✅ Redis ready');
+      this._isConnected = true;
     });
 
     this.client.on('error', (error) => {
-      this.isConnected = false;
-      // Only log significant errors, not every disconnection
-      if (error.message.includes('ECONNRESET') || error.message.includes('Socket closed')) {
-        logger.debug(`Redis connection issue: ${error.message}`);
-      } else {
-        logger.error('Redis error:', error.message);
-      }
+      logger.error('❌ Redis error:', error);
+      this._isConnected = false;
     });
 
-    this.client.on('end', () => {
-      logger.warn('⚠️ Redis connection ended');
-      this.isConnected = false;
+    this.client.on('close', () => {
+      logger.warn('⚠️ Redis connection closed');
+      this._isConnected = false;
     });
 
-    this.client.on('reconnecting', () => {
-      logger.info(`🔄 Redis reconnecting... (attempt ${this.reconnectAttempts})`);
+    this.client.on('reconnecting', (times: number) => {
+      logger.info(`🔄 Redis reconnecting... Attempt ${times}`);
+      this._reconnectAttempts = times;
     });
   }
 
   async connect(): Promise<void> {
     try {
-      if (!this.client.isOpen) {
-        await this.client.connect();
-      }
-      
-      // Test the connection
       await this.client.ping();
-      logger.info('✅ Redis service initialized and tested');
+      this._isConnected = true;
+      logger.info('✅ Redis connection established');
     } catch (error) {
+      this._isConnected = false;
       logger.error('❌ Failed to connect to Redis:', error);
       throw error;
     }
@@ -83,127 +73,188 @@ export class RedisService {
 
   async disconnect(): Promise<void> {
     try {
-      if (this.client.isOpen) {
-        await this.client.disconnect();
-      }
-      logger.info('✅ Disconnected from Redis');
+      await this.client.quit();
+      this._isConnected = false;
+      logger.info('✅ Redis disconnected');
     } catch (error) {
       logger.error('❌ Failed to disconnect from Redis:', error);
+      throw error;
     }
   }
 
-  get isHealthy(): boolean {
-    return this.isConnected && this.client.isReady;
-  }
+  // === Opérations de base ===
 
-  // Wrapper with automatic retry for critical operations
-  private async executeWithRetry<T>(operation: () => Promise<T>, retries: number = 2): Promise<T | null> {
-    for (let i = 0; i <= retries; i++) {
-      try {
-        if (!this.client.isReady) {
-          if (i === retries) return null;
-          await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
-          continue;
-        }
-        return await operation();
-      } catch (error) {
-        if (i === retries) {
-          logger.error('Redis operation failed after retries:', error);
-          return null;
-        }
-        await new Promise(resolve => setTimeout(resolve, 500 * (i + 1)));
-      }
-    }
-    return null;
-  }
-
-  // Redis operations with retry logic
   async get(key: string): Promise<string | null> {
-    return this.executeWithRetry(() => this.client.get(key));
+    try {
+      return await this.client.get(key);
+    } catch (error) {
+      logger.error('Redis get error:', error);
+      return null;
+    }
   }
 
   async set(key: string, value: string, ttl?: number): Promise<void> {
-    await this.executeWithRetry(async () => {
+    try {
       if (ttl) {
-        await this.client.setEx(key, ttl, value);
+        await this.client.setex(key, ttl, value);
       } else {
         await this.client.set(key, value);
       }
-    });
+    } catch (error) {
+      logger.error('Redis set error:', error);
+    }
   }
 
   async del(key: string): Promise<number> {
-    const result = await this.executeWithRetry(() => this.client.del(key));
-    return result || 0;
+    try {
+      return await this.client.del(key);
+    } catch (error) {
+      logger.error('Redis del error:', error);
+      return 0;
+    }
   }
 
+  // === Opérations Hash ===
+
   async hGet(key: string, field: string): Promise<string | undefined> {
-    return this.executeWithRetry(() => this.client.hGet(key, field)) || undefined;
+    try {
+      const result = await this.client.hget(key, field);
+      return result || undefined;
+    } catch (error) {
+      logger.error('Redis hGet error:', error);
+      return undefined;
+    }
   }
 
   async hSet(key: string, field: string, value: string): Promise<number> {
-    const result = await this.executeWithRetry(() => this.client.hSet(key, field, value));
-    return result || 0;
+    try {
+      return await this.client.hset(key, field, value);
+    } catch (error) {
+      logger.error('Redis hSet error:', error);
+      return 0;
+    }
   }
 
   async hGetAll(key: string): Promise<Record<string, string>> {
-    const result = await this.executeWithRetry(() => this.client.hGetAll(key));
-    return result || {};
+    try {
+      return await this.client.hgetall(key);
+    } catch (error) {
+      logger.error('Redis hGetAll error:', error);
+      return {};
+    }
   }
 
+  // === Opérations Sorted Sets ===
+
   async zAdd(key: string, score: number, member: string): Promise<number> {
-    const result = await this.executeWithRetry(() => 
-      this.client.zAdd(key, { score, value: member })
-    );
-    return result || 0;
+    try {
+      return await this.client.zadd(key, score, member);
+    } catch (error) {
+      logger.error('Redis zAdd error:', error);
+      return 0;
+    }
   }
 
   async zRevRange(key: string, start: number, stop: number): Promise<string[]> {
-    const result = await this.executeWithRetry(() => this.client.zRevRange(key, start, stop));
-    return result || [];
+    try {
+      return await this.client.zrevrange(key, start, stop);
+    } catch (error) {
+      logger.error('Redis zRevRange error:', error);
+      return [];
+    }
   }
 
-  // Game-specific methods (simplified, no retry needed for these)
+  // === Méthodes spécifiques au jeu ===
+
   async cacheUserData(userId: string, userData: any, ttl: number = 3600): Promise<void> {
-    const key = `user:${userId}`;
-    await this.set(key, JSON.stringify(userData), ttl);
+    await this.set(`user:${userId}`, JSON.stringify(userData), ttl);
   }
 
   async getUserData(userId: string): Promise<any | null> {
-    const key = `user:${userId}`;
-    const data = await this.get(key);
+    const data = await this.get(`user:${userId}`);
     return data ? JSON.parse(data) : null;
   }
 
   async cacheTokenPrice(price: number, timestamp: number): Promise<void> {
-    const key = 'token:current_price';
-    await this.set(key, JSON.stringify({ price, timestamp }), 300);
+    await this.set('token:current_price', JSON.stringify({ price, timestamp }), 300);
   }
 
   async getCurrentTokenPrice(): Promise<{ price: number; timestamp: number } | null> {
-    const key = 'token:current_price';
-    const data = await this.get(key);
+    const data = await this.get('token:current_price');
     return data ? JSON.parse(data) : null;
   }
 
   async addToLeaderboard(userId: string, score: number): Promise<void> {
-    const key = 'leaderboard:tokens';
-    await this.zAdd(key, score, userId);
+    await this.zAdd('leaderboard:tokens', score, userId);
   }
 
   async getLeaderboard(limit: number = 10): Promise<Array<{ userId: string; score: number }>> {
-    const key = 'leaderboard:tokens';
-    const result = await this.zRevRange(key, 0, limit - 1);
-    
-    const leaderboard = [];
-    for (let i = 0; i < result.length; i += 2) {
-      leaderboard.push({
-        userId: result[i],
-        score: parseFloat(result[i + 1] || '0')
-      });
+    try {
+      const results = await this.zRevRange('leaderboard:tokens', 0, limit - 1);
+      
+      // Récupérer les scores pour chaque membre
+      const leaderboard = [];
+      for (const userId of results) {
+        const score = await this.client.zscore('leaderboard:tokens', userId);
+        leaderboard.push({ userId, score: parseFloat(score || '0') });
+      }
+      
+      return leaderboard;
+    } catch (error) {
+      logger.error('Redis getLeaderboard error:', error);
+      return [];
     }
-    return leaderboard;
+  }
+
+  // === Méthodes Redis supplémentaires ===
+
+  async exists(key: string): Promise<number> {
+    try {
+      return await this.client.exists(key);
+    } catch (error) {
+      logger.error('Redis exists error:', error);
+      return 0;
+    }
+  }
+
+  async expire(key: string, seconds: number): Promise<number> {
+    try {
+      return await this.client.expire(key, seconds);
+    } catch (error) {
+      logger.error('Redis expire error:', error);
+      return 0;
+    }
+  }
+
+  async ttl(key: string): Promise<number> {
+    try {
+      return await this.client.ttl(key);
+    } catch (error) {
+      logger.error('Redis ttl error:', error);
+      return -1;
+    }
+  }
+
+  async keys(pattern: string): Promise<string[]> {
+    try {
+      return await this.client.keys(pattern);
+    } catch (error) {
+      logger.error('Redis keys error:', error);
+      return [];
+    }
+  }
+
+  async flushdb(): Promise<void> {
+    try {
+      await this.client.flushdb();
+    } catch (error) {
+      logger.error('Redis flushdb error:', error);
+    }
+  }
+
+  // === Méthodes legacy pour compatibilité ===
+
+  async setex(key: string, seconds: number, value: string): Promise<void> {
+    await this.set(key, value, seconds);
   }
 }
-
-export default RedisService;

@@ -1,3 +1,4 @@
+// src/commands/game/cours.ts - Version corrigée
 import { SlashCommandBuilder, EmbedBuilder, CommandInteraction } from 'discord.js';
 import { TokenPriceService } from '../../services/token-price/TokenPriceService';
 import { logger } from '../../utils/logger';
@@ -15,12 +16,18 @@ export const data = new SlashCommandBuilder()
         { name: '7 jours', value: '168' }
       ));
 
-export async function execute(interaction: CommandInteraction) {
+export async function execute(interaction: CommandInteraction, services: Map<string, any>) {
   try {
     await interaction.deferReply();
 
     const period = parseInt(interaction.options.get('periode')?.value as string || '24');
-    const tokenPriceService = new TokenPriceService();
+    
+    // Utiliser le service depuis la map des services au lieu de créer une nouvelle instance
+    const tokenPriceService = services.get('tokenPrice') as TokenPriceService;
+    
+    if (!tokenPriceService) {
+      throw new Error('TokenPriceService not available');
+    }
 
     // Récupérer les données actuelles du token
     const [priceData, marketStats, priceHistory] = await Promise.all([
@@ -173,10 +180,28 @@ export async function execute(interaction: CommandInteraction) {
   } catch (error) {
     logger.error('Error in cours command:', error);
     
+    // Message d'erreur plus détaillé pour le debug
+    const errorMessage = error instanceof Error ? error.message : 'Erreur inconnue';
+    
     const errorEmbed = new EmbedBuilder()
       .setColor(0xff0000)
-      .setTitle('❌ Erreur')
-      .setDescription('Impossible de récupérer les données du cours. Veuillez réessayer.')
+      .setTitle('❌ Service Temporairement Indisponible')
+      .setDescription([
+        'Le service de cours des tokens est en cours de configuration.',
+        '',
+        '💡 **Systèmes disponibles** :',
+        '• `/profile` - Votre profil',
+        '• `/balance` - Vos soldes',
+        '• `/salaire` - Salaire hebdomadaire',
+        '• `/help` - Guide complet'
+      ].join('\n'))
+      .addFields([
+        {
+          name: '🔧 Information technique',
+          value: `Erreur: ${errorMessage}`,
+          inline: false
+        }
+      ])
       .setTimestamp();
 
     await interaction.editReply({ embeds: [errorEmbed] });

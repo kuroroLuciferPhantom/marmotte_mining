@@ -1,7 +1,8 @@
+// src/services/token-price/TokenMarketService.ts - Version corrigée
 import { Client, TextChannel, EmbedBuilder } from 'discord.js';
 import { TokenPriceService } from './TokenPriceService';
 import { DatabaseService } from '../database/DatabaseService';
-import { RedisService } from '../cache/RedisService';
+import { ICacheService } from '../cache/ICacheService';
 import { logger } from '../../utils/logger';
 import { config } from '../../config/config';
 
@@ -15,17 +16,17 @@ export interface PriceAlert {
 export class TokenMarketService {
   private client: Client;
   private tokenPriceService: TokenPriceService;
-  private redisService: RedisService;
-  private db: DatabaseService;
+  private cache: ICacheService;
+  private database: DatabaseService;
   private marketChannelId?: string;
   private lastNotificationTime: number = 0;
   private readonly NOTIFICATION_COOLDOWN = 5 * 60 * 1000; // 5 minutes
 
-  constructor(client: Client, marketChannelId?: string) {
+  constructor(client: Client, database: DatabaseService, cache: ICacheService, marketChannelId?: string) {
     this.client = client;
-    this.tokenPriceService = new TokenPriceService();
-    this.redisService = RedisService.getInstance();
-    this.db = DatabaseService.getInstance();
+    this.database = database;
+    this.cache = cache;
+    this.tokenPriceService = new TokenPriceService(database, cache);
     this.marketChannelId = marketChannelId;
   }
 
@@ -241,8 +242,8 @@ export class TokenMarketService {
       ]);
 
       const prices24h = history24h.map(h => h.price);
-      const high24h = Math.max(...prices24h);
-      const low24h = Math.min(...prices24h);
+      const high24h = prices24h.length > 0 ? Math.max(...prices24h) : priceData.price;
+      const low24h = prices24h.length > 0 ? Math.min(...prices24h) : priceData.price;
 
       const embed = new EmbedBuilder()
         .setTitle('📋 Rapport Quotidien du Marché $7N1')
@@ -329,7 +330,7 @@ export class TokenMarketService {
       analysis.push('⚠️ **Événements négatifs** - Facteurs défavorables actifs');
     }
 
-    return analysis.join('\n• ');
+    return analysis.length > 0 ? analysis.join('\n• ') : '📊 **Marché normal** - Aucun événement particulier';
   }
 
   /**
@@ -349,7 +350,7 @@ export class TokenMarketService {
    */
   private async getLastNotifiedPrice(): Promise<number> {
     try {
-      const cached = await this.redisService.get('last_notified_price');
+      const cached = await this.cache.get('last_notified_price');
       return cached ? parseFloat(cached) : 0;
     } catch (error) {
       return 0;
@@ -361,7 +362,7 @@ export class TokenMarketService {
    */
   private async setLastNotifiedPrice(price: number): Promise<void> {
     try {
-      await this.redisService.setex('last_notified_price', 3600, price.toString());
+      await this.cache.set('last_notified_price', price.toString(), 3600);
     } catch (error) {
       logger.error('Error setting last notified price:', error);
     }
@@ -455,7 +456,7 @@ export class TokenMarketService {
    */
   private async getAlertCount24h(): Promise<number> {
     try {
-      const count = await this.redisService.get('alert_count_24h');
+      const count = await this.cache.get('alert_count_24h');
       return count ? parseInt(count) : 0;
     } catch (error) {
       return 0;

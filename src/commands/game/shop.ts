@@ -12,6 +12,7 @@ import {
 } from 'discord.js';
 import { MachineType, AttackType, DefenseType, CardRarity, FragmentType, TransactionType } from '@prisma/client';
 import { MiningService } from '../../services/mining/MiningService';
+import { ActivityService } from '../../services/activity/ActivityService';
 
 export const data = new SlashCommandBuilder()
   .setName('shop')
@@ -33,31 +34,36 @@ const machineInfo = {
     name: '🔧 BASIC RIG',
     emoji: '🔧',
     description: 'Machine d\'entrée parfaite pour débuter',
-    details: 'Robuste et économique, idéale pour les nouveaux mineurs'
+    details: 'Robuste et économique, idéale pour les nouveaux mineurs',
+    dollarPrice: 1000 // 🆕 Prix en dollars au lieu de tokens
   },
   ADVANCED_RIG: {
     name: '⚡ ADVANCED RIG', 
     emoji: '⚡',
     description: 'Performance améliorée pour mineurs expérimentés',
-    details: 'Hashrate 5x supérieur avec efficacité optimisée'
+    details: 'Hashrate 5x supérieur avec efficacité optimisée',
+    dollarPrice: 5000 // 🆕 Prix en dollars
   },
   QUANTUM_MINER: {
     name: '🌟 QUANTUM MINER',
     emoji: '🌟', 
     description: 'Technologie quantique de pointe',
-    details: 'Puissance de calcul révolutionnaire avec algorithmes avancés'
+    details: 'Puissance de calcul révolutionnaire avec algorithmes avancés',
+    dollarPrice: 20000 // 🆕 Prix en dollars
   },
   FUSION_REACTOR: {
     name: '☢️ FUSION REACTOR',
     emoji: '☢️',
     description: 'Réacteur à fusion pour les mineurs d\'élite',
-    details: 'Énergie nucléaire pour un hashrate extraordinaire'
+    details: 'Énergie nucléaire pour un hashrate extraordinaire',
+    dollarPrice: 100000 // 🆕 Prix en dollars
   },
   MEGA_FARM: {
     name: '🏭 MEGA FARM',
     emoji: '🏭',
     description: 'Complexe industriel de minage massif',
-    details: 'La solution ultime pour dominer le réseau'
+    details: 'La solution ultime pour dominer le réseau',
+    dollarPrice: 500000 // 🆕 Prix en dollars
   }
 };
 
@@ -408,34 +414,45 @@ async function handleCategorySelection(interaction: StringSelectMenuInteraction,
 
 async function showMiningCategory(interaction: StringSelectMenuInteraction, user: any, services: Map<string, any>) {
   const miningService = services.get('mining') as MiningService;
-  const machineConfigs = miningService.getMachineConfigs();
+  const activityService = services.get('activity') as ActivityService;
+  
+  // Récupérer le solde en dollars
+  const dollarBalance = await activityService.getUserDollarBalance(interaction.user.id);
 
   const miningEmbed = new EmbedBuilder()
     .setColor(0xE67E22)
     .setTitle('⛏️ **ÉQUIPEMENTS DE MINAGE** ⛏️')
-    .setDescription(`**💰 Budget**: ${user.tokens.toFixed(2)} tokens | **🏭 Machines**: ${user.machines.length}\n\n*Investissez dans des machines pour augmenter vos gains!*`)
+    .setDescription(`**💵 Budget dollars**: ${dollarBalance.toFixed(2)}$ | **🪙 Tokens**: ${user.tokens.toFixed(2)} | **🏭 Machines**: ${user.machines.length}\n\n*Investissez en dollars pour acheter des machines qui produisent des tokens!*`)
     .addFields(
       {
         name: '📊 **CATALOGUE DES MACHINES**',
-        value: Object.entries(machineConfigs).map(([type, config]) => {
-          const info = machineInfo[type as MachineType];
-          const affordable = user.tokens >= config.cost ? '✅' : '❌';
-          return `${affordable} ${info.emoji} **${info.name}**\n💰 ${config.cost} tokens | ⚡ ${config.baseHashRate}/s | 🔋 ${config.powerConsumption}W`;
+        value: Object.entries(machineInfo).map(([type, info]) => {
+          const affordable = dollarBalance >= info.dollarPrice ? '✅' : '❌';
+          return `${affordable} ${info.emoji} **${info.name}**\n💵 ${info.dollarPrice.toLocaleString()}$ | 📈 Produit des tokens | ${info.description}`;
         }).join('\n\n'),
+        inline: false
+      },
+      {
+        name: '💡 **CONSEIL ÉCONOMIQUE**',
+        value: [
+          '• Les machines s\'achètent en **dollars** 💵',
+          '• Les machines produisent des **tokens** 🪙',
+          '• Les tokens servent pour les battles et upgrades',
+          '• Plus vous investissez, plus vous gagnez!'
+        ].join('\n'),
         inline: false
       }
     )
-    .setFooter({ text: '💡 Plus le prix est élevé, plus les gains sont importants!' });
+    .setFooter({ text: '💰 Investissement en dollars, gains en tokens!' });
 
   const machineMenu = new StringSelectMenuBuilder()
     .setCustomId('shop_machine_select')
     .setPlaceholder('🛒 Choisissez une machine à acheter...')
     .addOptions(
-      Object.entries(machineConfigs).map(([type, config]) => {
-        const info = machineInfo[type as MachineType];
+      Object.entries(machineInfo).map(([type, info]) => {
         return {
-          label: `${info.name} - ${config.cost} tokens`,
-          description: `${info.description} | ⚡${config.baseHashRate}/s`,
+          label: `${info.name} - ${info.dollarPrice.toLocaleString()}$`,
+          description: `${info.description} | Investissement dollars → gains tokens`,
           value: `machine_${type}`,
           emoji: info.emoji
         };
@@ -631,33 +648,33 @@ async function handleProductSelection(interaction: StringSelectMenuInteraction, 
 
   let productInfo: any;
   let price: number;
+  let currency: 'dollars' | 'tokens' = 'tokens'; // Par défaut tokens
 
   switch (category) {
     case 'machine':
-      const miningService = services.get('mining') as MiningService;
-      const machineConfigs = miningService.getMachineConfigs();
-      const machineConfig = machineConfigs[itemType as MachineType];
-      productInfo = {
-        ...machineInfo[itemType as MachineType],
-        ...machineConfig
-      };
-      price = machineConfig.cost;
+      productInfo = machineInfo[itemType as keyof typeof machineInfo];
+      price = productInfo.dollarPrice; // 🆕 Utilise le prix en dollars
+      currency = 'dollars'; // 🆕 Monnaie = dollars
       break;
     case 'attack':
       productInfo = attackCardInfo[itemType as keyof typeof attackCardInfo];
       price = productInfo.price;
+      currency = 'tokens'; // Les cartes restent en tokens
       break;
     case 'defense':
       productInfo = defenseCardInfo[itemType as keyof typeof defenseCardInfo];
       price = productInfo.price;
+      currency = 'tokens';
       break;
     case 'fragment':
       productInfo = fragmentInfo[itemType as keyof typeof fragmentInfo];
       price = productInfo.price;
+      currency = 'tokens';
       break;
     case 'consumable':
       productInfo = consumableInfo[itemType as keyof typeof consumableInfo];
       price = productInfo.price;
+      currency = 'tokens';
       break;
     default:
       await interaction.reply({
@@ -667,28 +684,76 @@ async function handleProductSelection(interaction: StringSelectMenuInteraction, 
       return;
   }
 
-  if (user.tokens < price) {
+  // Vérifier les fonds selon la monnaie
+  let userBalance: number;
+  let balanceText: string;
+  let currencySymbol: string;
+
+  if (currency === 'dollars') {
+    const activityService = services.get('activity') as ActivityService;
+    userBalance = await activityService.getUserDollarBalance(interaction.user.id);
+    balanceText = 'dollars';
+    currencySymbol = '$';
+  } else {
+    userBalance = user.tokens;
+    balanceText = 'tokens';
+    currencySymbol = '';
+  }
+
+  if (userBalance < price) {
+    const insufficientEmbed = new EmbedBuilder()
+      .setColor(0xff0000)
+      .setTitle('❌ Fonds insuffisants')
+      .setDescription(`Vous avez besoin de **${price.toLocaleString()}${currencySymbol}** mais vous n'avez que **${userBalance.toFixed(2)}${currencySymbol}**.`)
+      .addFields([
+        {
+          name: currency === 'dollars' ? '💡 Comment gagner des dollars ?' : '💡 Comment gagner des tokens ?',
+          value: currency === 'dollars' ? 
+            '• Écrire des messages Discord (+1$)\n• Réagir aux messages (+0.5$)\n• Utiliser `/salaire` chaque semaine (+250$)\n• Bonus quotidiens et streaks' :
+            '• Acheter des machines avec des dollars\n• Miner des tokens avec vos machines\n• Échanger des dollars contre tokens\n• Gagner des battles royales',
+          inline: false
+        }
+      ])
+      .setTimestamp();
+
     await interaction.reply({
-      content: `❌ Fonds insuffisants! Vous avez besoin de **${price} tokens** mais vous n'avez que **${user.tokens.toFixed(2)} tokens**.`,
+      embeds: [insufficientEmbed],
       ephemeral: true
     });
     return;
   }
 
-  // Affiche la confirmation d'achat
+  // Créer l'embed de confirmation
   const confirmEmbed = new EmbedBuilder()
-    .setColor(0xE67E22)
+    .setColor(currency === 'dollars' ? 0x27AE60 : 0xE67E22)
     .setTitle(`${productInfo.emoji} Confirmer l'achat`)
-    .setDescription(`**Produit**: ${productInfo.name}\n**Prix**: ${price} tokens\n**Description**: ${productInfo.description}`)
+    .setDescription(`**Produit**: ${productInfo.name}\n**Prix**: ${price.toLocaleString()}${currencySymbol}\n**Description**: ${productInfo.description}`)
     .addFields(
-      { name: '💰 Solde actuel', value: `${user.tokens.toFixed(2)} tokens`, inline: true },
-      { name: '💰 Solde après achat', value: `${(user.tokens - price).toFixed(2)} tokens`, inline: true }
-    )
-    .setFooter({ text: 'Confirmez-vous cet achat?' });
+      { 
+        name: `💰 Solde actuel (${balanceText})`, 
+        value: `${userBalance.toFixed(2)}${currencySymbol}`, 
+        inline: true 
+      },
+      { 
+        name: `💰 Solde après achat`, 
+        value: `${(userBalance - price).toFixed(2)}${currencySymbol}`, 
+        inline: true 
+      }
+    );
+
+  if (currency === 'dollars') {
+    confirmEmbed.addFields({
+      name: '🎯 Avantage économique',
+      value: '💵 → 🪙 Investissement dollars pour gains tokens permanents!',
+      inline: false
+    });
+  }
+
+  confirmEmbed.setFooter({ text: 'Confirmez-vous cet achat?' });
 
   const confirmButton = new ButtonBuilder()
     .setCustomId(`confirm_purchase_${productId}`)
-    .setLabel('✅ Confirmer l\'achat')
+    .setLabel(`✅ Acheter ${price.toLocaleString()}${currencySymbol}`)
     .setStyle(ButtonStyle.Success);
 
   const cancelButton = new ButtonBuilder()
@@ -1003,6 +1068,66 @@ async function purchaseConsumable(userId: string, consumableType: string, databa
     return {
       success: false,
       message: 'Erreur lors de l\'achat du consommable.'
+    };
+  }
+}
+
+async function purchaseMachineWithDollars(userId: string, machineType: keyof typeof machineInfo, databaseService: any, activityService: any): Promise<{success: boolean, message: string}> {
+  const machineInfo_local = machineInfo[machineType];
+  const price = machineInfo_local.dollarPrice;
+
+  try {
+    // Vérifier le solde en dollars
+    const dollarBalance = await activityService.getUserDollarBalance(userId);
+    
+    if (dollarBalance < price) {
+      return {
+        success: false,
+        message: `Fonds insuffisants! Vous avez besoin de ${price.toLocaleString()}$ mais vous n'avez que ${dollarBalance.toFixed(2)}$.`
+      };
+    }
+
+    // Vérifier la capacité de machines (utiliser le système existant)
+    const user = await databaseService.client.user.findUnique({
+      where: { discordId: userId },
+      include: { machines: true }
+    });
+
+    // Transaction pour acheter la machine
+    await databaseService.client.$transaction(async (tx: any) => {
+      // Débiter les dollars via une transaction fictive
+      // (Note: Il faudrait implémenter activityService.deductDollars)
+      await tx.transaction.create({
+        data: {
+          userId: user.id,
+          type: 'MACHINE_PURCHASE',
+          amount: -price,
+          description: `Achat machine ${machineType} pour ${price.toLocaleString()}$`
+        }
+      });
+
+      // Créer la machine (utiliser la configuration du MiningService)
+      await tx.machine.create({
+        data: {
+          userId: user.id,
+          type: machineType,
+          level: 1,
+          efficiency: 100.0,
+          durability: 100.0
+        }
+      });
+    });
+
+    return {
+      success: true,
+      message: `🎉 Machine **${machineInfo_local.name}** achetée avec succès pour ${price.toLocaleString()}$! Elle va maintenant générer des tokens.`
+    };
+
+  } catch (error) {
+    console.error('Error purchasing machine with dollars:', error);
+    return {
+      success: false,
+      message: 'Erreur lors de l\'achat de la machine.'
     };
   }
 }

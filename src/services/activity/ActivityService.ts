@@ -329,6 +329,83 @@ export class ActivityService {
     }
   }
 
+  /**
+ * 💰 NOUVEAU : Débite des dollars du compte d'un utilisateur
+ */
+async deductDollars(userId: string, amount: number): Promise<{ success: boolean; newBalance?: number; error?: string }> {
+  try {
+    await this.ensureUserExists(userId);
+
+    // Vérifier le solde actuel
+    const currentBalance = await this.getUserDollarBalance(userId);
+    
+    if (currentBalance < amount) {
+      return {
+        success: false,
+        error: `Solde insuffisant. Disponible: ${currentBalance.toFixed(2)}$, Requis: ${amount}$`
+      };
+    }
+
+    // Créer une transaction de débit
+    await this.database.client.activityReward.create({
+      data: {
+        userId,
+        type: ActivityType.WEEKLY_SALARY, // Réutiliser ce type ou créer DEDUCTION
+        amount: -amount, // Montant négatif pour débit
+        multiplier: 1.0
+      }
+    });
+
+    const newBalance = currentBalance - amount;
+    
+    logger.info(`User ${userId} debited ${amount}$ (new balance: ${newBalance}$)`);
+    
+    return {
+      success: true,
+      newBalance
+    };
+
+  } catch (error) {
+    logger.error('Error deducting dollars:', error);
+    return {
+      success: false,
+      error: 'Erreur lors de la déduction'
+    };
+  }
+}
+
+async creditDollars(userId: string, amount: number, description: string = 'Crédit manuel'): Promise<{ success: boolean; newBalance?: number; error?: string }> {
+  try {
+    await this.ensureUserExists(userId);
+
+    // Créer une transaction de crédit
+    await this.database.client.activityReward.create({
+      data: {
+        userId,
+        type: ActivityType.WEEKLY_SALARY, // Réutiliser ce type
+        amount: amount, // Montant positif pour crédit
+        multiplier: 1.0
+      }
+    });
+
+    const newBalance = await this.getUserDollarBalance(userId);
+    
+    logger.info(`User ${userId} credited ${amount}$ (new balance: ${newBalance}$) - ${description}`);
+    
+    return {
+      success: true,
+      newBalance
+    };
+
+  } catch (error) {
+    logger.error('Error crediting dollars:', error);
+    return {
+      success: false,
+      error: 'Erreur lors du crédit'
+    };
+  }
+}
+
   // === Méthodes existantes (inchangées) ===
 
   /**
@@ -450,5 +527,6 @@ export class ActivityService {
     return bonusEmojis.includes(emoji) ? 1.5 : 1.0;
   }
 }
+
 
 export default ActivityService;
