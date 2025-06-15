@@ -24,7 +24,7 @@ export async function execute(interaction: CommandInteraction, services: Map<str
   try {
     await interaction.deferReply();
 
-    const userId = interaction.user.id;
+    const discordUserId = interaction.user.id;
     const direction = interaction.options.get('direction')?.value as string;
     const amount = interaction.options.get('montant')?.value as number;
 
@@ -33,7 +33,7 @@ export async function execute(interaction: CommandInteraction, services: Map<str
 
     // Récupérer l'utilisateur
     const user = await db.client.user.findUnique({
-      where: { discordId: userId }
+      where: { discordId: discordUserId }
     });
     if (!user) {
       await interaction.editReply('❌ Utilisateur non trouvé. Veuillez d\'abord utiliser une commande pour vous enregistrer.');
@@ -180,42 +180,44 @@ export async function execute(interaction: CommandInteraction, services: Map<str
       iconURL: interaction.client.user?.displayAvatarURL()
     }).setTimestamp();
 
+    // Préparer les données de transaction
+    const transactionType = direction === 'dollars_to_tokens' ? 'EXCHANGE_DOLLAR_TO_TOKEN' : 'EXCHANGE_TOKEN_TO_DOLLAR';
+    const transactionAmount = direction === 'dollars_to_tokens' ? exchangedAmount : -amount;
+    const transactionDescription = direction === 'dollars_to_tokens' ? 
+      `Échange $${amount} → ${exchangedAmount.toFixed(6)} $7N1` :
+      `Échange ${amount.toFixed(6)} $7N1 → $${exchangedAmount.toFixed(6)}`;
+
+    // Effectuer la transaction atomique avec l'ID interne de l'utilisateur
     await db.client.$transaction(async (tx: any) => {
-      // Mettre à jour la base de données
-        await tx.user.update({
-          where: { discordId: userId },
-          data: {
-            dollars: newDollars,
-            tokens: newTokens
-          }
+      // Mettre à jour l'utilisateur
+      await tx.user.update({
+        where: { discordId: discordUserId },
+        data: {
+          dollars: newDollars,
+          tokens: newTokens
+        }
       });
 
-      // Enregistrer la transaction
-      const transactionType = direction === 'dollars_to_tokens' ? 'EXCHANGE_DOLLAR_TO_TOKEN' : 'EXCHANGE_TOKEN_TO_DOLLAR';
-      const transactionAmount = direction === 'dollars_to_tokens' ? exchangedAmount : -amount;
-      const transactionDescription = direction === 'dollars_to_tokens' ? 
-        `Échange $${amount} → ${exchangedAmount.toFixed(6)} $7N1` :
-        `Échange ${amount.toFixed(6)} $7N1 → $${exchangedAmount.toFixed(6)}`;
-
+      // Enregistrer la transaction avec l'ID interne de l'utilisateur
       await tx.transaction.create({
         data: {
-          userId,
+          userId: user.id, // ← Utilisation de l'ID interne au lieu du discordId
           type: transactionType,
           amount: transactionAmount,
           description: transactionDescription,
           metadata: {
-              exchangeRate: priceData.price,
-              direction,
-              originalAmount: amount,
-              commission: direction === 'tokens_to_dollars' ? amount * priceData.price * 0.01 : 0
-            }
+            exchangeRate: priceData.price,
+            direction,
+            originalAmount: amount,
+            commission: direction === 'tokens_to_dollars' ? amount * priceData.price * 0.01 : 0
+          }
         }
+      });
     });
-  });
 
-  await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [embed] });
 
-    logger.info(`User ${userId} exchanged ${direction}: ${amount} at rate ${priceData.price}`);
+    logger.info(`User ${discordUserId} exchanged ${direction}: ${amount} at rate ${priceData.price}`);
 
   } catch (error) {
     logger.error('Error in echanger command:', error);
