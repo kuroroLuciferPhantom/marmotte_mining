@@ -7,16 +7,18 @@ export const data = new SlashCommandBuilder()
   .setName('wallet')
   .setDescription('Affiche votre portefeuille avec la valeur actuelle de vos tokens $7N1');
 
-export async function execute(interaction: CommandInteraction) {
+export async function execute(interaction: CommandInteraction, services: Map<string, any>) {
   try {
     await interaction.deferReply();
 
     const userId = interaction.user.id;
-    const tokenPriceService = new TokenPriceService();
-    const db = DatabaseService.getInstance();
+    const tokenPriceService = services.get('tokenPrice') as TokenPriceService;
+    const db = services.get('database') as DatabaseService;
 
     // Récupérer les données utilisateur
-    const user = await db.getUser(userId);
+    const user = await db.client.user.findUnique({
+      where: { discordId: userId }
+    });
     if (!user) {
       await interaction.editReply('❌ Utilisateur non trouvé. Veuillez d\'abord utiliser une commande pour vous enregistrer.');
       return;
@@ -88,23 +90,7 @@ export async function execute(interaction: CommandInteraction) {
         text: `💡 Prix mis à jour • Utilisez /echanger pour convertir $ ↔ $7N1`,
         iconURL: interaction.client.user?.displayAvatarURL()
       })
-      .setTimestamp();
-
-    // Ajouter une barre de progression pour le niveau si applicable
-    if (user.level > 1) {
-      const nextLevelXp = user.level * 1000; // Exemple de calcul XP
-      const progressPercent = Math.min((user.experience % nextLevelXp) / nextLevelXp * 100, 100);
-      const progressBar = '█'.repeat(Math.floor(progressPercent / 10)) + 
-                         '░'.repeat(10 - Math.floor(progressPercent / 10));
-      
-      embed.addFields([
-        {
-          name: `⭐ Niveau ${user.level}`,
-          value: `${progressBar} ${user.experience}/${nextLevelXp} XP`,
-          inline: false
-        }
-      ]);
-    }
+      .setTimestamp();    
 
     await interaction.editReply({ embeds: [embed] });
 

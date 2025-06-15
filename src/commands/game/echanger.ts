@@ -35,6 +35,8 @@ export async function execute(interaction: CommandInteraction, services: Map<str
     const user = await db.client.user.findUnique({
       where: { discordId: discordUserId }
     });
+
+    
     if (!user) {
       await interaction.editReply('❌ Utilisateur non trouvé. Veuillez d\'abord utiliser une commande pour vous enregistrer.');
       return;
