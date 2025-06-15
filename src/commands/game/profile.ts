@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { ActivityService } from '../../services/activity/ActivityService';
 import { HousingService } from '../../services/housing/HousingService';
+import { DatabaseService } from '../../services/database/DatabaseService';
 
 export const data = new SlashCommandBuilder()
   .setName('profile')
@@ -9,17 +10,21 @@ export const data = new SlashCommandBuilder()
 export async function execute(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   try {
     const activityService = services.get('activity') as ActivityService;
-    const databaseService = services.get('database');
+    const databaseService = services.get('database') as DatabaseService;
+    const housingService = services.get('housing') as HousingService;
     
     // Get user data
     const user = await databaseService.client.user.findUnique({
       where: { discordId: interaction.user.id },
-      include: { machines: true }
+      include: { 
+        machines: true,
+        battleEntries: {
+          include: {
+            battle: true
+          }
+        }
+      }
     });
-
-    const housingService = new HousingService(databaseService.getInstance().prisma);
-    const housingInfo = housingService.getHousingInfo(user.housingType);
-    const rentStatus = await housingService.getRentStatus(user.id);
 
     if (!user) {
       // Rediriger vers l'inscription au lieu de créer automatiquement
@@ -46,7 +51,27 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       return;
     }
 
+    // Get housing information
+    const housingInfo = housingService.getHousingInfo(user.housingType);
+    const rentStatus = await housingService.getRentStatus(user.id);
+
+    // Get battle statistics
+    const completedBattles = user.battleEntries.filter(entry => 
+      entry.battle.status === 'FINISHED'
+    );
+    const battlesWon = completedBattles.filter(entry => entry.position === 1).length;
+    const battlesLost = completedBattles.filter(entry => entry.position > 1).length;
+
+    // Get dollar balance
     const dollarBalance = await activityService.getUserDollarBalance(interaction.user.id);
+
+    // Count sabotage defenses (approximate from existing data)
+    const sabotageDefenses = await databaseService.client.sabotageDefense.count({
+      where: { 
+        userId: user.id,
+        success: true
+      }
+    });
 
     // Create profile embed with location
     const embed = new EmbedBuilder()
@@ -56,14 +81,15 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       .addFields(
         { name: '📍 Lieu', value: user.location || 'Chambre chez maman', inline: true },
         { name: '🏠 Logement', value: `${housingInfo.emoji} ${housingInfo.name}`, inline: true },
-        { name: '🔧 Capacité', value: `${user.machines.length.toString()}/${housingInfo.maxMachines} machines`, inline: true },
+        { name: '🔧 Capacité', value: `${user.machines.length}/${housingInfo.maxMachines} machines`, inline: true },
         { name: '💰 Tokens', value: user.tokens.toFixed(2), inline: true },
         { name: '💵 Dollars', value: `${dollarBalance.toFixed(2)}$`, inline: true },
         { name: '⛏️ Machines', value: user.machines.length.toString(), inline: true },
         { name: '📈 Total miné', value: `${user.totalMined.toFixed(2)} tokens`, inline: true },
-        { name: '⚔️ Batailles', value: `${user.battlesWon}W / ${user.battlesLost}L`, inline: true },
+        { name: '⚔️ Batailles', value: `${battlesWon}W / ${battlesLost}L`, inline: true },
         { name: '🔥 Statut', value: user.miningActive ? '⛏️ En minage' : '😴 Inactif', inline: true },
-        { name: '🛡️ Défenses', value: user.sabotagesBlocked > 0 ? `${user.sabotagesBlocked} bloquées` : 'Aucune', inline: true },
+        { name: '🛡️ Défenses', value: sabotageDefenses > 0 ? `${sabotageDefenses} bloquées` : 'Aucune', inline: true },
+        { name: '💸 Loyer', value: rentStatus.isOverdue ? '🔴 En retard' : '🟢 À jour', inline: true },
         { name: '📅 Membre depuis', value: `<t:${Math.floor(user.createdAt.getTime() / 1000)}:R>`, inline: true }
       )
       .setFooter({ text: 'Marmotte Mining • Utilisez /help pour voir toutes les commandes' })
