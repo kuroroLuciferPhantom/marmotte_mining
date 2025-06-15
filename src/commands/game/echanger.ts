@@ -20,7 +20,7 @@ export const data = new SlashCommandBuilder()
       .setRequired(true)
       .setMinValue(0.01));
 
-export async function execute(interaction: CommandInteraction) {
+export async function execute(interaction: CommandInteraction, services: Map<string, any>) {
   try {
     await interaction.deferReply();
 
@@ -28,8 +28,9 @@ export async function execute(interaction: CommandInteraction) {
     const direction = interaction.options.get('direction')?.value as string;
     const amount = interaction.options.get('montant')?.value as number;
 
-    const tokenPriceService = new TokenPriceService();
-    const db = DatabaseService.getInstance();
+    // Get services from dependency injection
+    const tokenPriceService = services.get('tokenPrice') as TokenPriceService;
+    const db = services.get('database') as DatabaseService;
 
     // Récupérer l'utilisateur
     const user = await db.getUser(userId);
