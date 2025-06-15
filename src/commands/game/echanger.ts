@@ -30,10 +30,10 @@ export async function execute(interaction: CommandInteraction, services: Map<str
 
     // Get services from dependency injection
     const tokenPriceService = services.get('tokenPrice') as TokenPriceService;
-    const db = services.get('database') as DatabaseService;
+    const databaseService = services.get('database') as DatabaseService;
 
     // Récupérer l'utilisateur
-    const user = await db.getUser(userId);
+    const user = await databaseService.getUser(userId);
     if (!user) {
       await interaction.editReply('❌ Utilisateur non trouvé. Veuillez d\'abord utiliser une commande pour vous enregistrer.');
       return;
@@ -179,32 +179,39 @@ export async function execute(interaction: CommandInteraction, services: Map<str
       iconURL: interaction.client.user?.displayAvatarURL()
     }).setTimestamp();
 
-    // Mettre à jour la base de données
-    await db.updateUser(userId, {
-      dollars: newDollars,
-      tokens: newTokens
-    });
-
-    // Enregistrer la transaction
+    // Préparer les données de transaction
     const transactionType = direction === 'dollars_to_tokens' ? 'DOLLAR_EXCHANGE' : 'TOKEN_PURCHASE';
     const transactionAmount = direction === 'dollars_to_tokens' ? exchangedAmount : -amount;
     const transactionDescription = direction === 'dollars_to_tokens' ? 
       `Échange $${amount} → ${exchangedAmount.toFixed(6)} $7N1` :
       `Échange ${amount.toFixed(6)} $7N1 → $${exchangedAmount.toFixed(6)}`;
 
-    await db.getClient().transaction.create({
-      data: {
-        userId,
-        type: transactionType,
-        amount: transactionAmount,
-        description: transactionDescription,
-        metadata: {
-          exchangeRate: priceData.price,
-          direction,
-          originalAmount: amount,
-          commission: direction === 'tokens_to_dollars' ? amount * priceData.price * 0.01 : 0
+    // Effectuer la transaction atomique
+    await databaseService.client.$transaction(async (tx: any) => {
+      // Mettre à jour l'utilisateur
+      await tx.user.update({
+        where: { discordId: userId },
+        data: {
+          dollars: newDollars,
+          tokens: newTokens
         }
-      }
+      });
+
+      // Enregistrer la transaction
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: transactionType,
+          amount: transactionAmount,
+          description: transactionDescription,
+          metadata: {
+            exchangeRate: priceData.price,
+            direction,
+            originalAmount: amount,
+            commission: direction === 'tokens_to_dollars' ? amount * priceData.price * 0.01 : 0
+          }
+        }
+      });
     });
 
     await interaction.editReply({ embeds: [embed] });
