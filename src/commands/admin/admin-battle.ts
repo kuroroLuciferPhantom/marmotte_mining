@@ -706,11 +706,18 @@ async function endRegistrationAndStartBattle(services: Map<string, any>, client:
     const { BattleService } = await import('../../services/battle/BattleService');
     const battleService = new BattleService(databaseService, cacheService);
     
-    // Récupérer le client Discord depuis les services
-    const client = services.get('client') || services.get('discord');
-    
+    // ✅ Récupérer le canal et vérifier son type
     const channel = await client.channels.fetch(channelId);
     if (!channel) return;
+
+    // ✅ Vérifier que c'est un canal textuel
+    if (!channel.isTextBased()) {
+      logger.error('Channel is not text-based, cannot send messages');
+      return;
+    }
+
+    // ✅ Cast en TextChannel
+    const textChannel = channel as TextChannel;
 
     const battleInfo = await battleService.getBattleInfo(currentBattle.id);
     
@@ -729,7 +736,8 @@ Aucun frais à rembourser (entrée gratuite).
         `)
         .setTimestamp();
 
-      const message = await channel.messages.fetch(currentBattle.messageId);
+      // ✅ Utiliser textChannel
+      const message = await textChannel.messages.fetch(currentBattle.messageId);
       await message.edit({ embeds: [cancelEmbed], components: [] });
       
       await battleService.cancelBattle(currentBattle.id);
@@ -754,7 +762,8 @@ Récompenses : Top 5 joueurs gagnent des tokens !
       .setImage('https://media.giphy.com/media/3o7abKhOpu0NwenH3O/giphy.gif')
       .setTimestamp();
 
-    const message = await channel.messages.fetch(currentBattle.messageId);
+    // ✅ Utiliser textChannel
+    const message = await textChannel.messages.fetch(currentBattle.messageId);
     await message.edit({ embeds: [startEmbed], components: [] });
 
     // Compte à rebours dramatique
@@ -796,8 +805,8 @@ Suivez les événements en temps réel...
 
     await message.edit({ embeds: [goEmbed] });
 
-    // Lancer la simulation de combat
-    await simulateEpicBattle(currentBattle.id, channel, services);
+    // ✅ Passer textChannel au lieu de channel
+    await simulateEpicBattle(currentBattle.id, textChannel, services);
 
   } catch (error) {
     logger.error('Error ending registration and starting battle:', error);

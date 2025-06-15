@@ -210,7 +210,6 @@ export class BattleInteractionHandler {
 ${entryMessage}
 
 **🎮 Connection successful !**
-Entry fee paid: **${entryFee} tokens**
 
 *"You are now part of the digital resistance..."*
       `)
