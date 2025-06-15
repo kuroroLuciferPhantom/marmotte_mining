@@ -62,7 +62,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       entry.battle.status === 'FINISHED'
     );
     const battlesWon = completedBattles.filter(entry => entry.position === 1).length;
-    const battlesLost = completedBattles.filter(entry => entry.position > 1).length;
+    const battlesLost = completedBattles.filter(entry => entry.position !== null && entry.position > 1).length;
 
     // Get dollar balance
     const dollarBalance = await activityService.getUserDollarBalance(interaction.user.id);
@@ -91,7 +91,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         { name: '⚔️ Batailles', value: `${battlesWon}W / ${battlesLost}L`, inline: true },
         { name: '🔥 Statut', value: user.miningActive ? '⛏️ En minage' : '😴 Inactif', inline: true },
         { name: '🛡️ Défenses', value: sabotageDefenses > 0 ? `${sabotageDefenses} bloquées` : 'Aucune', inline: true },
-        { name: '💸 Loyer', value: rentStatus.isOverdue ? '🔴 En retard' : '🟢 À jour', inline: true },
+        { name: '💸 Loyer', value: rentStatus ? (rentStatus.isOverdue ? '🔴 En retard' : '🟢 À jour') : 'Maman qui régale', inline: true },
         { name: '📅 Membre depuis', value: `<t:${Math.floor(user.createdAt.getTime() / 1000)}:R>`, inline: true }
       )
       .setFooter({ text: 'Marmotte Mining • Utilisez /help pour voir toutes les commandes' })
