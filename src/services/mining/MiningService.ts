@@ -40,7 +40,7 @@ export class MiningService {
   // Configuration des machines avec système d'usure
   private machineConfigs: Record<MachineType, MachineConfig> = {
     BASIC_RIG: {
-      cost: 100,
+      cost: 1000,
       baseHashRate: 0.1,
       powerConsumption: 10,
       maintenanceCost: 5,
@@ -49,7 +49,7 @@ export class MiningService {
       energyCostPerWatt: 0.001 // 0.001 token par Watt/heure
     },
     ADVANCED_RIG: {
-      cost: 500,
+      cost: 5000,
       baseHashRate: 0.5,
       powerConsumption: 25,
       maintenanceCost: 15,
@@ -58,7 +58,7 @@ export class MiningService {
       energyCostPerWatt: 0.001
     },
     QUANTUM_MINER: {
-      cost: 2000,
+      cost: 20000,
       baseHashRate: 2.0,
       powerConsumption: 50,
       maintenanceCost: 50,
@@ -67,7 +67,7 @@ export class MiningService {
       energyCostPerWatt: 0.0015
     },
     FUSION_REACTOR: {
-      cost: 10000,
+      cost: 100000,
       baseHashRate: 10.0,
       powerConsumption: 100,
       maintenanceCost: 200,
@@ -76,7 +76,7 @@ export class MiningService {
       energyCostPerWatt: 0.002
     },
     MEGA_FARM: {
-      cost: 50000,
+      cost: 500000,
       baseHashRate: 50.0,
       powerConsumption: 300,
       maintenanceCost: 1000,
