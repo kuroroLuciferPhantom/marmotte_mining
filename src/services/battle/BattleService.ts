@@ -67,189 +67,243 @@ export class BattleService {
     }
   }
 
-  /**
-   * Rejoint une bataille
-   */
-  async joinBattle(userId: string, battleId?: string): Promise<{ success: boolean; message: string; battleInfo?: BattleInfo }> {
-    try {
-      const user = await this.database.client.user.findUnique({
-        where: { id: userId }
-      });
+/**
+ * Rejoint une bataille
+ */
+async joinBattle(discordId: string, battleId?: string): Promise<{ success: boolean; message: string; battleInfo?: BattleInfo }> {
+  try {
+    logger.info(`🔍 [joinBattle] START - discordId: ${discordId}, battleId: ${battleId}`);
+    
+    // ✅ CORRECTION : Chercher par discordId au lieu de id
+    logger.info(`🔍 [joinBattle] Searching for user with discordId: ${discordId}`);
+    const user = await this.database.client.user.findUnique({
+      where: { discordId: discordId }
+    });
 
-      if (!user) {
-        return { success: false, message: 'Utilisateur non trouvé' };
-      }
+    logger.info(`🔍 [joinBattle] User found:`, user ? `YES - id: ${user.id}, username: ${user.username}, tokens: ${user.tokens}` : 'NO');
 
-      // Vérifie le cooldown
-      const lastBattle = await this.database.client.battleEntry.findFirst({
-        where: { userId },
-        orderBy: { joinedAt: 'desc' },
-        include: { battle: true }
-      });
+    if (!user) {
+      logger.warn(`❌ [joinBattle] User not found for discordId: ${discordId}`);
+      return { success: false, message: 'Utilisateur non trouvé. Utilisez /register d\'abord !' };
+    }
 
-      if (lastBattle) {
-        const timeSinceLastBattle = Date.now() - lastBattle.joinedAt.getTime();
-        const cooldownTime = config.game.battleCooldown * 1000;
-        
-        if (timeSinceLastBattle < cooldownTime) {
-          const remainingTime = Math.ceil((cooldownTime - timeSinceLastBattle) / 1000 / 60);
-          return { 
-            success: false, 
-            message: `⏰ Vous devez attendre ${remainingTime} minutes avant de rejoindre une autre bataille` 
-          };
-        }
-      }
+    // Vérifie le cooldown
+    logger.info(`🔍 [joinBattle] Checking cooldown for user ${user.id}`);
+    const lastBattle = await this.database.client.battleEntry.findFirst({
+      where: { userId: user.id },
+      orderBy: { joinedAt: 'desc' },
+      include: { battle: true }
+    });
 
-      // Trouve une bataille disponible
-      let battle;
-      if (battleId) {
-        battle = await this.database.client.battle.findUnique({
-          where: { id: battleId },
-          include: { entries: true }
-        });
-      } else {
-        battle = await this.database.client.battle.findFirst({
-          where: { status: BattleStatus.WAITING },
-          include: { entries: true },
-          orderBy: { createdAt: 'asc' }
-        });
+    logger.info(`🔍 [joinBattle] Last battle:`, lastBattle ? `Found - battleId: ${lastBattle.battleId}, joinedAt: ${lastBattle.joinedAt}` : 'None');
 
-        if (!battle) {
-          const createResult = await this.createBattle();
-          if (!createResult.success || !createResult.battleId) {
-            return { success: false, message: 'Impossible de créer une bataille' };
-          }
-          
-          battle = await this.database.client.battle.findUnique({
-            where: { id: createResult.battleId },
-            include: { entries: true }
-          });
-        }
-      }
-
-      if (!battle) {
-        return { success: false, message: 'Aucune bataille disponible' };
-      }
-
-      if (battle.entries.length >= battle.maxPlayers) {
-        return { success: false, message: 'Cette bataille est complète' };
-      }
-
-      const existingEntry = await this.database.client.battleEntry.findUnique({
-        where: { 
-          battleId_userId: { 
-            battleId: battle.id, 
-            userId 
-          } 
-        }
-      });
-
-      if (existingEntry) {
-        return { success: false, message: 'Vous êtes déjà dans cette bataille' };
-      }
-
-      const entryFee = Math.max(10, user.level * 5);
+    if (lastBattle) {
+      const timeSinceLastBattle = Date.now() - lastBattle.joinedAt.getTime();
+      const cooldownTime = config.game.battleCooldown * 1000;
       
-      if (user.tokens < entryFee) {
+      logger.info(`🔍 [joinBattle] Cooldown check - timeSince: ${timeSinceLastBattle}ms, required: ${cooldownTime}ms`);
+      
+      if (timeSinceLastBattle < cooldownTime) {
+        const remainingTime = Math.ceil((cooldownTime - timeSinceLastBattle) / 1000 / 60);
+        logger.warn(`❌ [joinBattle] Cooldown active - ${remainingTime} minutes remaining`);
         return { 
           success: false, 
-          message: `Fonds insuffisants! Frais d'entrée: ${entryFee} tokens` 
+          message: `⏰ Vous devez attendre ${remainingTime} minutes avant de rejoindre une autre bataille` 
         };
       }
+    }
 
-      // Transaction pour rejoindre
-      await this.database.client.$transaction(async (tx) => {
-        await tx.user.update({
-          where: { id: userId },
-          data: { tokens: { decrement: entryFee } }
-        });
-
-        await tx.battleEntry.create({
-          data: {
-            battleId: battle.id,
-            userId
-          }
-        });
-
-        await tx.battle.update({
-          where: { id: battle.id },
-          data: { prizePool: { increment: entryFee } }
-        });
-
-        await tx.transaction.create({
-          data: {
-            userId,
-            type: TransactionType.BATTLE_ENTRY,
-            amount: -entryFee,
-            description: `Participation bataille ${battle.id}`
-          }
-        });
-      });
-
-      const updatedBattle = await this.database.client.battle.findUnique({
-        where: { id: battle.id },
+    // Trouve une bataille disponible
+    logger.info(`🔍 [joinBattle] Looking for battle - specific battleId: ${battleId || 'any available'}`);
+    let battle;
+    
+    if (battleId) {
+      logger.info(`🔍 [joinBattle] Searching for specific battle: ${battleId}`);
+      battle = await this.database.client.battle.findUnique({
+        where: { id: battleId },
         include: { entries: true }
       });
+      logger.info(`🔍 [joinBattle] Specific battle found:`, battle ? `YES - status: ${battle.status}, entries: ${battle.entries.length}/${battle.maxPlayers}` : 'NO');
+    } else {
+      logger.info(`🔍 [joinBattle] Searching for any waiting battle`);
+      battle = await this.database.client.battle.findFirst({
+        where: { status: BattleStatus.WAITING },
+        include: { entries: true },
+        orderBy: { createdAt: 'asc' }
+      });
+      logger.info(`🔍 [joinBattle] Available battle found:`, battle ? `YES - id: ${battle.id}, entries: ${battle.entries.length}` : 'NO');
 
-      let battleInfo: BattleInfo = {
-        id: battle.id,
-        status: battle.status,
-        participants: (updatedBattle?.entries.length || 0),
-        maxPlayers: battle.maxPlayers,
-        prizePool: battle.prizePool + entryFee
-      };
-
-      // Démarre si pleine
-      if (updatedBattle && updatedBattle.entries.length >= battle.maxPlayers) {
-        await this.startBattle(battle.id);
-        battleInfo.status = BattleStatus.ACTIVE;
+      if (!battle) {
+        logger.info(`🔍 [joinBattle] No waiting battle found, creating new one`);
+        const createResult = await this.createBattle();
+        logger.info(`🔍 [joinBattle] Battle creation result:`, createResult);
+        
+        if (!createResult.success || !createResult.battleId) {
+          logger.error(`❌ [joinBattle] Failed to create battle`);
+          return { success: false, message: 'Impossible de créer une bataille' };
+        }
+        
+        battle = await this.database.client.battle.findUnique({
+          where: { id: createResult.battleId },
+          include: { entries: true }
+        });
+        logger.info(`🔍 [joinBattle] New battle retrieved:`, battle ? `YES - id: ${battle.id}` : 'NO');
       }
-
-      logger.info(`User ${userId} joined battle ${battle.id}`);
-      
-      return {
-        success: true,
-        message: `⚔️ Vous avez rejoint la bataille! Frais: ${entryFee} tokens`,
-        battleInfo
-      };
-
-    } catch (error) {
-      logger.error('Error joining battle:', error);
-      return { success: false, message: 'Erreur lors de la participation à la bataille' };
     }
-  }
 
-  /**
-   * Démarre une bataille
-   */
-  private async startBattle(battleId: string): Promise<void> {
-    try {
-      await this.database.client.battle.update({
-        where: { id: battleId },
+    if (!battle) {
+      logger.error(`❌ [joinBattle] No battle available after all attempts`);
+      return { success: false, message: 'Aucune bataille disponible' };
+    }
+
+    logger.info(`🔍 [joinBattle] Battle validation - entries: ${battle.entries.length}, maxPlayers: ${battle.maxPlayers}`);
+
+    if (battle.entries.length >= battle.maxPlayers) {
+      logger.warn(`❌ [joinBattle] Battle is full: ${battle.entries.length}/${battle.maxPlayers}`);
+      return { success: false, message: 'Cette bataille est complète' };
+    }
+
+    logger.info(`🔍 [joinBattle] Checking if user already in battle`);
+    const existingEntry = await this.database.client.battleEntry.findUnique({
+      where: { 
+        battleId_userId: { 
+          battleId: battle.id, 
+          userId: user.id
+        } 
+      }
+    });
+
+    logger.info(`🔍 [joinBattle] Existing entry:`, existingEntry ? `FOUND - user already in battle` : 'NONE - user can join');
+
+    if (existingEntry) {
+      logger.warn(`❌ [joinBattle] User already in battle`);
+      return { success: false, message: 'Vous êtes déjà dans cette bataille' };
+    }
+
+    logger.info(`🔍 [joinBattle] Starting transaction to join battle`);
+
+    // Transaction pour rejoindre
+    await this.database.client.$transaction(async (tx) => {
+      logger.info(`🔍 [joinBattle] Creating battle entry`);
+      await tx.battleEntry.create({
         data: {
-          status: BattleStatus.ACTIVE,
-          startTime: new Date()
+          battleId: battle.id,
+          userId: user.id
         }
       });
 
-      await this.redis.hSet(`battle:${battleId}`, 'status', 'ACTIVE');
+      logger.info(`🔍 [joinBattle] Updating battle prize pool`);
+      await tx.battle.update({
+        where: { id: battle.id },
+        data: { prizePool: { increment: 5 } }
+      });
 
-      // Programme la fin de la bataille (durée aléatoire entre 2-5 minutes)
-      const battleDuration = (120 + Math.random() * 180) * 1000; // 2-5 minutes en ms
-      
-      const timeout = setTimeout(async () => {
-        await this.endBattle(battleId);
-        this.activeBattles.delete(battleId);
-      }, battleDuration);
+      logger.info(`🔍 [joinBattle] Creating transaction record`);
+      await tx.transaction.create({
+        data: {
+          userId: user.id,
+          type: TransactionType.BATTLE_ENTRY,
+          amount: 0,
+          description: `Participation bataille ${battle.id}`
+        }
+      });
+    });
 
-      this.activeBattles.set(battleId, timeout);
-      
-      logger.info(`Battle ${battleId} started, will end in ${battleDuration/1000} seconds`);
+    logger.info(`✅ [joinBattle] Transaction completed successfully`);
 
-    } catch (error) {
-      logger.error('Error starting battle:', error);
+    const updatedBattle = await this.database.client.battle.findUnique({
+      where: { id: battle.id },
+      include: { entries: true }
+    });
+
+    logger.info(`🔍 [joinBattle] Updated battle entries: ${updatedBattle?.entries.length || 0}`);
+
+    let battleInfo: BattleInfo = {
+      id: battle.id,
+      status: battle.status,
+      participants: (updatedBattle?.entries.length || 0),
+      maxPlayers: battle.maxPlayers,
+      prizePool: battle.prizePool + 5
+    };
+
+    // Démarre si pleine
+    if (updatedBattle && updatedBattle.entries.length >= battle.maxPlayers) {
+      logger.info(`🔍 [joinBattle] Battle is full, starting battle`);
+      await this.startBattle(battle.id);
+      battleInfo.status = BattleStatus.ACTIVE;
     }
+
+    logger.info(`✅ [joinBattle] SUCCESS - User ${discordId} (${user.id}) joined battle ${battle.id}`);
+    
+    return {
+      success: true,
+      message: `⚔️ Vous avez rejoint la bataille!`,
+      battleInfo
+    };
+
+  } catch (error: any) {
+    logger.error(`💥 [joinBattle] EXCEPTION caught:`, error);
+    logger.error(`💥 [joinBattle] Error stack:`, error.stack);
+    return { success: false, message: `Erreur lors de la participation à la bataille: ${error.message}` };
   }
+}
+
+  /**
+ * Démarre une bataille (méthode publique)
+ */
+async startBattle(battleId: string): Promise<{ success: boolean; message: string }> {
+  try {
+    logger.info(`🚀 [startBattle] Starting battle ${battleId}`);
+    
+    const battle = await this.database.client.battle.findUnique({
+      where: { id: battleId },
+      include: { entries: true }
+    });
+
+    if (!battle) {
+      return { success: false, message: 'Bataille non trouvée' };
+    }
+
+    if (battle.status !== BattleStatus.WAITING) {
+      return { success: false, message: `Bataille déjà dans l'état: ${battle.status}` };
+    }
+
+    if (battle.entries.length === 0) {
+      return { success: false, message: 'Aucun participant dans la bataille' };
+    }
+
+    await this.database.client.battle.update({
+      where: { id: battleId },
+      data: {
+        status: BattleStatus.ACTIVE,
+        startTime: new Date()
+      }
+    });
+
+    await this.redis.hSet(`battle:${battleId}`, 'status', 'ACTIVE');
+
+    // Programme la fin de la bataille (durée aléatoire entre 2-5 minutes)
+    const battleDuration = (120 + Math.random() * 180) * 1000; // 2-5 minutes en ms
+    
+    const timeout = setTimeout(async () => {
+      await this.endBattle(battleId);
+      this.activeBattles.delete(battleId);
+    }, battleDuration);
+
+    this.activeBattles.set(battleId, timeout);
+    
+    logger.info(`✅ [startBattle] Battle ${battleId} started with ${battle.entries.length} participants, will end in ${battleDuration/1000} seconds`);
+
+    return { 
+      success: true, 
+      message: `Bataille démarrée avec ${battle.entries.length} participants` 
+    };
+
+  } catch (error) {
+    logger.error('Error starting battle:', error);
+    return { success: false, message: 'Erreur lors du démarrage de la bataille' };
+  }
+}
 
   /**
    * Termine une bataille et distribue les récompenses
@@ -528,26 +582,7 @@ export class BattleService {
 
       if (battle.status !== BattleStatus.WAITING) {
         return { success: false, message: 'Seules les batailles en attente peuvent être annulées' };
-      }
-
-      // Rembourse tous les participants
-      for (const entry of battle.entries) {
-        const entryFee = Math.max(10, entry.user.level * 5);
-        
-        await this.database.client.user.update({
-          where: { id: entry.userId },
-          data: { tokens: { increment: entryFee } }
-        });
-
-        await this.database.client.transaction.create({
-          data: {
-            userId: entry.userId,
-            type: TransactionType.BATTLE_REWARD,
-            amount: entryFee,
-            description: `Remboursement bataille annulée ${battleId}`
-          }
-        });
-      }
+      }      
 
       // Marque la bataille comme annulée
       await this.database.client.battle.update({

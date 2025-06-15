@@ -73,81 +73,110 @@ export class BattleInteractionHandler {
   }
 
   private async handleJoinButton(interaction: ButtonInteraction): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ ephemeral: true });
 
-    const battleId = interaction.customId.replace('join_battle_', '');
+  const battleId = interaction.customId.replace('join_battle_', '');
+  
+  logger.info(`🔍 [handleJoinButton] START - user: ${interaction.user.id} (${interaction.user.username}), battleId: ${battleId}`);
 
-    // Vérifications de base
-    if (!currentBattle || currentBattle.id !== battleId) {
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setColor(0xff0000)
-          .setTitle('❌ Battle Not Found')
-          .setDescription('Cette bataille n\'existe plus ou a expiré.\n\n*"Like tears in rain... time to die." - Blade Runner*')
-          .setTimestamp()]
-      });
-      return;
-    }
-
-    if (currentBattle.status !== 'registration') {
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setColor(0xff6600)
-          .setTitle('⚠️ Registration Closed')
-          .setDescription(`Les inscriptions sont fermées !\n\nStatut actuel: ${this.getStatusText(currentBattle.status)}`)
-          .setTimestamp()]
-      });
-      return;
-    }
-
-    // Vérifier si déjà inscrit
-    if (currentBattle.participants.includes(interaction.user.id)) {
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setColor(0xff6600)
-          .setTitle('⚠️ Already Connected')
-          .setDescription(`Tu es déjà dans cette bataille, ${interaction.user.username} !\n\n*"You're already in the matrix, Neo..."*`)
-          .setTimestamp()]
-      });
-      return;
-    }
-
-    // Vérifier si la bataille est pleine
-    if (currentBattle.participants.length >= currentBattle.maxPlayers) {
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setColor(0xff0000)
-          .setTitle('🚫 Server Full')
-          .setDescription('Cette bataille est complète !\n\n*"No more connections available. Try again later."*')
-          .setTimestamp()]
-      });
-      return;
-    }
-
-    // Créer le BattleService dynamiquement
-    const { BattleService } = await import('./BattleService');
-    const battleService = new BattleService(this.databaseService, this.cacheService);
-
-    // Tenter de rejoindre
-    const result = await battleService.joinBattle(interaction.user.id, battleId);
-
-    if (!result.success) {
-      const failEmbed = new EmbedBuilder()
+  // Vérifications de base
+  if (!currentBattle || currentBattle.id !== battleId) {
+    logger.warn(`❌ [handleJoinButton] Battle not found or mismatch - currentBattle: ${currentBattle?.id}, requested: ${battleId}`);
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
         .setColor(0xff0000)
-        .setTitle('🚫 Join Failed')
-        .setDescription(`**Access denied !**\n\n${result.message}`)
-        .addFields([
-          {
-            name: '💡 Troubleshooting',
-            value: '• Check your token balance\n• Wait for cooldown to expire\n• Contact admin if issue persists',
-            inline: false
-          }
-        ])
-        .setTimestamp();
+        .setTitle('❌ Battle Not Found')
+        .setDescription('Cette bataille n\'existe plus ou a expiré.\n\n*"Like tears in rain... time to die." - Blade Runner*')
+        .setTimestamp()]
+    });
+    return;
+  }
 
-      await interaction.editReply({ embeds: [failEmbed] });
-      return;
-    }
+  logger.info(`🔍 [handleJoinButton] Current battle status: ${currentBattle.status}`);
+
+  if (currentBattle.status !== 'registration') {
+    logger.warn(`❌ [handleJoinButton] Registration closed - status: ${currentBattle.status}`);
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xff6600)
+        .setTitle('⚠️ Registration Closed')
+        .setDescription(`Les inscriptions sont fermées !\n\nStatut actuel: ${this.getStatusText(currentBattle.status)}`)
+        .setTimestamp()]
+    });
+    return;
+  }
+
+  // Vérifier si déjà inscrit
+  const isAlreadyParticipant = currentBattle.participants.includes(interaction.user.id);
+  logger.info(`🔍 [handleJoinButton] Already participant check: ${isAlreadyParticipant} - participants: [${currentBattle.participants.join(', ')}]`);
+
+  if (isAlreadyParticipant) {
+    logger.warn(`❌ [handleJoinButton] User already in battle`);
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xff6600)
+        .setTitle('⚠️ Already Connected')
+        .setDescription(`Tu es déjà dans cette bataille, ${interaction.user.username} !\n\n*"You're already in the matrix, Neo..."*`)
+        .setTimestamp()]
+    });
+    return;
+  }
+
+  // Vérifier si la bataille est pleine
+  const isFull = currentBattle.participants.length >= currentBattle.maxPlayers;
+  logger.info(`🔍 [handleJoinButton] Battle capacity: ${currentBattle.participants.length}/${currentBattle.maxPlayers}, full: ${isFull}`);
+
+  if (isFull) {
+    logger.warn(`❌ [handleJoinButton] Battle is full`);
+    await interaction.editReply({
+      embeds: [new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle('🚫 Server Full')
+        .setDescription('Cette bataille est complète !\n\n*"No more connections available. Try again later."*')
+        .setTimestamp()]
+    });
+    return;
+  }
+
+  logger.info(`🔍 [handleJoinButton] All checks passed, attempting to join battle`);
+
+  // Créer le BattleService dynamiquement
+  const { BattleService } = await import('./BattleService');
+  const battleService = new BattleService(this.databaseService, this.cacheService);
+
+  logger.info(`🔍 [handleJoinButton] BattleService created, calling joinBattle with discordId: ${interaction.user.id}`);
+
+  // Tenter de rejoindre
+  const result = await battleService.joinBattle(interaction.user.id, battleId);
+
+  logger.info(`🔍 [handleJoinButton] joinBattle result:`, result);
+
+  if (!result.success) {
+    logger.error(`❌ [handleJoinButton] Join failed: ${result.message}`);
+    const failEmbed = new EmbedBuilder()
+      .setColor(0xff0000)
+      .setTitle('🚫 Join Failed')
+      .setDescription(`**Access denied !**\n\n${result.message}`)
+      .addFields([
+        {
+          name: '💡 Troubleshooting',
+          value: '• Check your token balance\n• Wait for cooldown to expire\n• Contact admin if issue persists',
+          inline: false
+        },
+        {
+          name: '🔧 Debug Info',
+          value: `DiscordId: ${interaction.user.id}\nBattleId: ${battleId}\nTimestamp: ${new Date().toISOString()}`,
+          inline: false
+        }
+      ])
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [failEmbed] });
+    return;
+  }
+
+    logger.info(`✅ [handleJoinButton] Join successful! Adding to participants list`);
+
 
     // Succès ! Ajouter aux participants
     currentBattle.participants.push(interaction.user.id);
@@ -165,6 +194,8 @@ export class BattleInteractionHandler {
     ];
 
     const entryMessage = entryMessages[Math.floor(Math.random() * entryMessages.length)];
+
+    logger.info(`🔍 [handleJoinButton] Sending success response`);
 
     // Obtenir le niveau de l'utilisateur pour calculer les frais
     const user = await this.databaseService.client.user.findUnique({

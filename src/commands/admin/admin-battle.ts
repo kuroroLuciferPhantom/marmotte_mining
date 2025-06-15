@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, ButtonBuilder, ActionRowBuilder, ButtonStyle, User as DiscordUser } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, ChatInputCommandInteraction, PermissionFlagsBits, TextChannel, ButtonBuilder, ActionRowBuilder, ButtonStyle, User as DiscordUser, Client } from 'discord.js';
 import { logger } from '../../utils/logger';
 import { any } from 'joi';
 
@@ -547,8 +547,16 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
   };
 
   // Programmer la fin des inscriptions
+  const client = interaction.client;
+  const channelId = interaction.channelId;
+
   setTimeout(async () => {
-    await endRegistrationAndStartBattle(services);
+    try {
+      // Passer le client et channelId comme paramètres
+      await endRegistrationAndStartBattle(services, client, channelId);
+    } catch (error) {
+      logger.error('Error in setTimeout for battle registration:', error);
+    }
   }, registrationTime * 60 * 1000);
 
   // Confirmation pour l'admin
@@ -687,7 +695,7 @@ function getStatusEmoji(status: string): string {
   }
 }
 
-async function endRegistrationAndStartBattle(services: Map<string, any>) {
+async function endRegistrationAndStartBattle(services: Map<string, any>, client: Client, channelId: string) {
   if (!currentBattle || currentBattle.status !== 'registration') return;
 
   try {
@@ -701,7 +709,7 @@ async function endRegistrationAndStartBattle(services: Map<string, any>) {
     // Récupérer le client Discord depuis les services
     const client = services.get('client') || services.get('discord');
     
-    const channel = await client.channels.fetch(currentBattle.channelId) as TextChannel;
+    const channel = await client.channels.fetch(channelId);
     if (!channel) return;
 
     const battleInfo = await battleService.getBattleInfo(currentBattle.id);

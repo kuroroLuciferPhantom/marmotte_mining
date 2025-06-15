@@ -144,6 +144,72 @@ async function handleCreateBattle(interaction: ChatInputCommandInteraction, serv
   }
 
   const registrationEndTime = new Date(Date.now() + registrationTime * 60 * 1000);
+
+  setTimeout(async () => {
+    try {
+      logger.info(`⏰ [AutoStart] Timer expired for battle ${result.battleId}, starting battle`);
+      
+      // Vérifier si la bataille existe encore et est en attente
+      const battleInfo = await battleService.getBattleInfo(result.battleId!);
+      if (battleInfo && battleInfo.status === 'WAITING' && battleInfo.participants > 0) {
+        logger.info(`🚀 [AutoStart] Starting battle ${result.battleId} with ${battleInfo.participants} participants`);
+        await battleService.startBattle(result.battleId!);
+        
+        // Annoncer le démarrage dans le canal
+        const channel = interaction.channel as TextChannel;
+        if (channel) {
+          const startEmbed = new EmbedBuilder()
+            .setTitle('⚔️ BATAILLE COMMENCÉE !')
+            .setColor(0xff0000)
+            .setDescription(`
+**🚨 Temps d'inscription écoulé !**
+
+La bataille royale démarre avec **${battleInfo.participants} guerriers** !
+Que le meilleur warrior gagne ! 🏆
+
+*"Let the digital carnage begin..."*
+            `)
+            .addFields([
+              {
+                name: '👥 Participants',
+                value: `${battleInfo.participants} warriors`,
+                inline: true
+              },
+              {
+                name: '💰 Prize Pool',
+                value: `${battleInfo.prizePool} tokens`,
+                inline: true
+              },
+              {
+                name: '⏱️ Durée estimée',
+                value: '2-5 minutes',
+                inline: true
+              }
+            ])
+            .setTimestamp();
+
+          await channel.send({ embeds: [startEmbed] });
+        }
+      } else if (battleInfo && battleInfo.participants === 0) {
+        logger.info(`❌ [AutoStart] Cancelling battle ${result.battleId} - no participants`);
+        await battleService.cancelBattle(result.battleId!);
+        
+        // Annoncer l'annulation
+        const channel = interaction.channel as TextChannel;
+        if (channel) {
+          const cancelEmbed = new EmbedBuilder()
+            .setTitle('💤 Bataille Annulée')
+            .setColor(0x95a5a6)
+            .setDescription('La bataille a été annulée faute de participants.\n\n*"No warriors showed up to the digital battlefield..."*')
+            .setTimestamp();
+
+          await channel.send({ embeds: [cancelEmbed] });
+        }
+      }
+    } catch (error) {
+      logger.error(`❌ [AutoStart] Error starting battle ${result.battleId}:`, error);
+    }
+  }, registrationTime * 60 * 1000); // Timer en millisecondes
   
   // Créer l'annonce publique
   const channel = interaction.channel as TextChannel;
