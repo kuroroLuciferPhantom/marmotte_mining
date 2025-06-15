@@ -8,7 +8,7 @@ import {
   StringSelectMenuInteraction,
   ButtonBuilder,
   ButtonStyle,
-  ButtonInteraction
+  ButtonInteraction,
 } from 'discord.js';
 import { MachineType, AttackType, DefenseType, CardRarity, FragmentType, TransactionType } from '@prisma/client';
 import { MiningService } from '../../services/mining/MiningService';
@@ -66,6 +66,8 @@ const machineInfo = {
     dollarPrice: 500000 // 🆕 Prix en dollars
   }
 };
+
+const { MessageFlags } = require('discord-api-types/v10');
 
 // Configuration des cartes d'attaque
 const attackCardInfo = {
@@ -204,8 +206,9 @@ export async function execute(interaction: ChatInputCommandInteraction, services
     if (!user) {
       await interaction.reply({
         content: '❌ Vous devez d\'abord créer un compte! Utilisez `/register`.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
+      
       return;
     }
 
@@ -217,7 +220,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
     
     const errorMessage = {
       content: '❌ Une erreur est survenue lors de l\'affichage de la boutique.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     };
 
     if (interaction.replied || interaction.deferred) {
@@ -257,12 +260,13 @@ async function showMainShop(interaction: ChatInputCommandInteraction | ButtonInt
   const actionRow = new ActionRowBuilder<StringSelectMenuBuilder>()
     .addComponents(categoryMenu);
 
-  if (interaction instanceof ChatInputCommandInteraction) {
-    const response = await interaction.reply({
-      embeds: [mainEmbed],
-      components: [actionRow],
-      fetchReply: true
+    if (interaction instanceof ChatInputCommandInteraction) {
+      await interaction.reply({
+        embeds: [mainEmbed],
+        components: [actionRow]
     });
+
+    const response = await interaction.fetchReply();
     setupMainCollector(response, interaction, services);
   } else {
     await interaction.update({
@@ -307,7 +311,7 @@ function setupMainCollector(response: any, interaction: ChatInputCommandInteract
     if (componentInteraction.user.id !== interaction.user.id) {
       await componentInteraction.reply({
         content: '❌ Vous ne pouvez pas utiliser cette boutique!',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
@@ -330,14 +334,15 @@ function setupMainCollector(response: any, interaction: ChatInputCommandInteract
     if (!currentUser) {
       await componentInteraction.reply({
         content: '❌ Utilisateur introuvable.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
-
+    
+    console.log('Current user data:', currentUser);
     if (componentInteraction.isStringSelectMenu()) {
       const selectInteraction: StringSelectMenuInteraction = componentInteraction as StringSelectMenuInteraction;
-      
+      console.log('Select interaction received:', selectInteraction.customId, selectInteraction.values);
       if (selectInteraction.customId === 'shop_category_select') {
         const category = selectInteraction.values[0] as ShopCategory;
         await handleCategorySelection(selectInteraction, currentUser, services, category);
@@ -346,6 +351,7 @@ function setupMainCollector(response: any, interaction: ChatInputCommandInteract
       }
     } else if (componentInteraction.isButton()) {
       const buttonInteraction: ButtonInteraction = componentInteraction as ButtonInteraction;
+      console.log('Button interaction received:', buttonInteraction.customId);
       await handleButtonClick(buttonInteraction, currentUser, services);
     }
   });
@@ -525,125 +531,283 @@ function createBackButton(): ButtonBuilder {
     .setStyle(ButtonStyle.Secondary);
 }
 
+// 🔍 LOGS DE DEBUG RAPIDE À AJOUTER DANS handleProductSelection()
+
+// 🛠️ FIX TIMEOUT INTERACTION : Déférer pour éviter l'expiration
+
 async function handleProductSelection(interaction: StringSelectMenuInteraction, user: any, services: Map<string, any>) {
+  console.log('🚀 handleProductSelection START');
+  
+  // ✅ FIX CRITIQUE : Déférer l'interaction IMMÉDIATEMENT
+  try {
+    await interaction.deferUpdate();
+    console.log('✅ Interaction deferred successfully');
+  } catch (deferError) {
+    console.error('❌ Failed to defer interaction:', deferError);
+    return; // Si on ne peut pas déférer, on abandonne
+  }
+
+  console.log('📦 Input data:', {
+    productId: interaction.values[0],
+    userExists: !!user,
+    servicesCount: services.size,
+    serviceKeys: Array.from(services.keys())
+  });
+
   const productId = interaction.values[0];
-  const [category, itemType] = productId.split('_');
+  
+  // Parsing correct pour les IDs avec underscores multiples
+  const firstUnderscoreIndex = productId.indexOf('_');
+  const category = productId.substring(0, firstUnderscoreIndex);
+  const itemType = productId.substring(firstUnderscoreIndex + 1);
+
+  console.log('🔍 Parsed CORRECTLY:', { 
+    category, 
+    itemType,
+    original: productId
+  });
 
   let productInfo: any;
   let price: number;
-  let currency: 'dollars' | 'tokens' = 'tokens'; // Par défaut tokens
+  let currency: 'dollars' | 'tokens' = 'tokens';
 
-  switch (category) {
-    case 'machine':
-      productInfo = machineInfo[itemType as keyof typeof machineInfo];
-      price = productInfo.dollarPrice; // 🆕 Utilise le prix en dollars
-      currency = 'dollars'; // 🆕 Monnaie = dollars
-      break;
-    case 'defense':
-      productInfo = defenseCardInfo[itemType as keyof typeof defenseCardInfo];
-      price = productInfo.price;
-      currency = 'tokens';
-      break;
-    case 'consumable':
-      productInfo = consumableInfo[itemType as keyof typeof consumableInfo];
-      price = productInfo.price;
-      currency = 'tokens';
-      break;
-    default:
-      await interaction.reply({
-        content: '❌ Produit non reconnu.',
-        ephemeral: true
+  console.log('🎯 Entering switch statement for category:', category);
+
+  try {
+    switch (category) {
+      case 'machine':
+        console.log('🏭 Machine case entered, looking for:', itemType);
+        
+        if (!(itemType in machineInfo)) {
+          console.error('❌ Machine type not found:', itemType);
+          await interaction.editReply({
+            content: `❌ Type de machine "${itemType}" non trouvé.`,
+            embeds: [],
+            components: []
+          });
+          return;
+        }
+        
+        productInfo = machineInfo[itemType as keyof typeof machineInfo];
+        console.log('📋 Machine info found:', productInfo);
+        
+        price = productInfo.dollarPrice;
+        currency = 'dollars';
+        console.log('💰 Price set:', price, currency);
+        break;
+
+      case 'defense':
+        console.log('🛡️ Defense case entered, looking for:', itemType);
+        
+        if (!(itemType in defenseCardInfo)) {
+          console.error('❌ Defense card type not found:', itemType);
+          await interaction.editReply({
+            content: `❌ Type de carte de défense "${itemType}" non trouvé.`,
+            embeds: [],
+            components: []
+          });
+          return;
+        }
+        
+        productInfo = defenseCardInfo[itemType as keyof typeof defenseCardInfo];
+        price = productInfo.price;
+        currency = 'tokens';
+        break;
+
+      case 'consumable':
+        console.log('🧪 Consumable case entered, looking for:', itemType);
+        
+        if (!(itemType in consumableInfo)) {
+          console.error('❌ Consumable type not found:', itemType);
+          await interaction.editReply({
+            content: `❌ Type de consommable "${itemType}" non trouvé.`,
+            embeds: [],
+            components: []
+          });
+          return;
+        }
+        
+        productInfo = consumableInfo[itemType as keyof typeof consumableInfo];
+        price = productInfo.price;
+        currency = 'tokens';
+        break;
+
+      default:
+        console.log('❌ Unknown category:', category);
+        await interaction.editReply({
+          content: '❌ Catégorie de produit non reconnue.',
+          embeds: [],
+          components: []
+        });
+        return;
+    }
+
+    console.log('✅ Switch completed, checking currency:', currency);
+
+    // Vérifier les fonds selon la monnaie
+    let userBalance: number;
+    let balanceText: string;
+    let currencySymbol: string;
+
+    if (currency === 'dollars') {
+      console.log('💵 Getting dollar balance...');
+      const activityService = services.get('activity') as ActivityService;
+      console.log('🔧 ActivityService found:', !!activityService);
+      
+      if (!activityService) {
+        console.error('❌ ActivityService is null/undefined!');
+        await interaction.editReply({
+          content: '❌ Service d\'activité indisponible.',
+          embeds: [],
+          components: []
+        });
+        return;
+      }
+
+      try {
+        console.log('📞 Calling getUserDollarBalance...');
+        userBalance = user.dollars || 0;
+        console.log('💰 Dollar balance retrieved:', userBalance);
+      } catch (balanceError) {
+        console.error('❌ Error getting dollar balance:', balanceError);
+        await interaction.editReply({
+          content: '❌ Erreur lors de la récupération du solde en dollars.',
+          embeds: [],
+          components: []
+        });
+        return;
+      }
+      
+      balanceText = 'dollars';
+      currencySymbol = '$';
+    } else {
+      console.log('🪙 Using token balance...');
+      userBalance = user.tokens || 0;
+      balanceText = 'tokens';
+      currencySymbol = '';
+    }
+
+    console.log('💵 Final balance check:', { userBalance, price, sufficient: userBalance >= price });
+
+    if (userBalance < price) {
+      console.log('💸 Insufficient funds, showing error embed');
+      
+      const insufficientEmbed = new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle('❌ Fonds insuffisants')
+        .setDescription(`Vous avez besoin de **${price.toLocaleString()}${currencySymbol}** mais vous n'avez que **${userBalance.toFixed(2)}${currencySymbol}**.`)
+        .addFields([
+          {
+            name: currency === 'dollars' ? '💡 Comment gagner des dollars ?' : '💡 Comment gagner des tokens ?',
+            value: currency === 'dollars' ? 
+              '• Écrire des messages Discord (+1$)\n• Réagir aux messages (+0.5$)\n• Utiliser `/salaire` chaque semaine (+250$)\n• Bonus quotidiens et streaks' :
+              '• Acheter des machines avec des dollars\n• Miner des tokens avec vos machines\n• Échanger des dollars contre tokens\n• Gagner des battles royales',
+            inline: false
+          }
+        ])
+        .setTimestamp();
+
+      // ✅ Utiliser editReply au lieu de reply car on a déféré
+      await interaction.editReply({
+        embeds: [insufficientEmbed],
+        components: []
       });
       return;
-  }
+    }
 
-  // Vérifier les fonds selon la monnaie
-  let userBalance: number;
-  let balanceText: string;
-  let currencySymbol: string;
+    console.log('✅ Sufficient funds, creating confirmation embed');
 
-  if (currency === 'dollars') {
-    const activityService = services.get('activity') as ActivityService;
-    userBalance = await activityService.getUserDollarBalance(interaction.user.id);
-    balanceText = 'dollars';
-    currencySymbol = '$';
-  } else {
-    userBalance = user.tokens;
-    balanceText = 'tokens';
-    currencySymbol = '';
-  }
-
-  if (userBalance < price) {
-    const insufficientEmbed = new EmbedBuilder()
-      .setColor(0xff0000)
-      .setTitle('❌ Fonds insuffisants')
-      .setDescription(`Vous avez besoin de **${price.toLocaleString()}${currencySymbol}** mais vous n'avez que **${userBalance.toFixed(2)}${currencySymbol}**.`)
-      .addFields([
-        {
-          name: currency === 'dollars' ? '💡 Comment gagner des dollars ?' : '💡 Comment gagner des tokens ?',
-          value: currency === 'dollars' ? 
-            '• Écrire des messages Discord (+1$)\n• Réagir aux messages (+0.5$)\n• Utiliser `/salaire` chaque semaine (+250$)\n• Bonus quotidiens et streaks' :
-            '• Acheter des machines avec des dollars\n• Miner des tokens avec vos machines\n• Échanger des dollars contre tokens\n• Gagner des battles royales',
-          inline: false
+    // Créer l'embed de confirmation
+    const confirmEmbed = new EmbedBuilder()
+      .setColor(currency === 'dollars' ? 0x27AE60 : 0xE67E22)
+      .setTitle(`${productInfo.emoji} Confirmer l'achat`)
+      .setDescription(`**Produit**: ${productInfo.name}\n**Prix**: ${price.toLocaleString()}${currencySymbol}\n**Description**: ${productInfo.description}`)
+      .addFields(
+        { 
+          name: `💰 Solde actuel (${balanceText})`, 
+          value: `${userBalance.toFixed(2)}${currencySymbol}`, 
+          inline: true 
+        },
+        { 
+          name: `💰 Solde après achat`, 
+          value: `${(userBalance - price).toFixed(2)}${currencySymbol}`, 
+          inline: true 
         }
-      ])
-      .setTimestamp();
+      );
 
-    await interaction.reply({
-      embeds: [insufficientEmbed],
-      ephemeral: true
+    if (currency === 'dollars') {
+      confirmEmbed.addFields({
+        name: '🎯 Avantage économique',
+        value: '💵 → 🪙 Investissement dollars pour gains tokens permanents!',
+        inline: false
+      });
+    }
+
+    confirmEmbed.setFooter({ text: 'Confirmez-vous cet achat?' });
+
+    const confirmButton = new ButtonBuilder()
+      .setCustomId(`confirm_purchase_${productId}`)
+      .setLabel(`✅ Acheter ${price.toLocaleString()}${currencySymbol}`)
+      .setStyle(ButtonStyle.Success);
+
+    const cancelButton = new ButtonBuilder()
+      .setCustomId('cancel_purchase')
+      .setLabel('❌ Annuler')
+      .setStyle(ButtonStyle.Danger);
+
+    const confirmRow = new ActionRowBuilder<ButtonBuilder>()
+      .addComponents(confirmButton, cancelButton);
+
+    console.log('📤 Sending confirmation embed via editReply');
+
+    // ✅ Utiliser editReply au lieu d'update car on a déféré
+    await interaction.editReply({
+      embeds: [confirmEmbed],
+      components: [confirmRow]
     });
-    return;
+
+    console.log('✅ handleProductSelection completed successfully');
+
+  } catch (error: any) {
+    console.error('❌ Error in handleProductSelection:', error);
+    console.error('Error stack:', error.stack);
+    
+    try {
+      await interaction.editReply({
+        content: '❌ Une erreur est survenue lors de la sélection du produit.',
+        embeds: [],
+        components: []
+      });
+    } catch (editError) {
+      console.error('❌ Failed to send error via editReply:', editError);
+    }
   }
-
-  // Créer l'embed de confirmation
-  const confirmEmbed = new EmbedBuilder()
-    .setColor(currency === 'dollars' ? 0x27AE60 : 0xE67E22)
-    .setTitle(`${productInfo.emoji} Confirmer l'achat`)
-    .setDescription(`**Produit**: ${productInfo.name}\n**Prix**: ${price.toLocaleString()}${currencySymbol}\n**Description**: ${productInfo.description}`)
-    .addFields(
-      { 
-        name: `💰 Solde actuel (${balanceText})`, 
-        value: `${userBalance.toFixed(2)}${currencySymbol}`, 
-        inline: true 
-      },
-      { 
-        name: `💰 Solde après achat`, 
-        value: `${(userBalance - price).toFixed(2)}${currencySymbol}`, 
-        inline: true 
-      }
-    );
-
-  if (currency === 'dollars') {
-    confirmEmbed.addFields({
-      name: '🎯 Avantage économique',
-      value: '💵 → 🪙 Investissement dollars pour gains tokens permanents!',
-      inline: false
-    });
-  }
-
-  confirmEmbed.setFooter({ text: 'Confirmez-vous cet achat?' });
-
-  const confirmButton = new ButtonBuilder()
-    .setCustomId(`confirm_purchase_${productId}`)
-    .setLabel(`✅ Acheter ${price.toLocaleString()}${currencySymbol}`)
-    .setStyle(ButtonStyle.Success);
-
-  const cancelButton = new ButtonBuilder()
-    .setCustomId('cancel_purchase')
-    .setLabel('❌ Annuler')
-    .setStyle(ButtonStyle.Danger);
-
-  const confirmRow = new ActionRowBuilder<ButtonBuilder>()
-    .addComponents(confirmButton, cancelButton);
-
-  await interaction.update({
-    embeds: [confirmEmbed],
-    components: [confirmRow]
-  });
 }
 
+/* 
+🎯 CHANGEMENTS CRITIQUES :
+
+✅ 1. await interaction.deferUpdate() IMMÉDIATEMENT
+✅ 2. Remplacer tous les interaction.reply() par interaction.editReply()
+✅ 3. Remplacer interaction.update() par interaction.editReply()
+✅ 4. Gestion d'erreur robuste avec try-catch
+
+🚀 POURQUOI ÇA MARCHE :
+- deferUpdate() dit à Discord "j'ai reçu l'interaction, je travaille dessus"
+- Ça donne 15 minutes au lieu de 3 secondes
+- editReply() met à jour le message différé
+- Plus d'erreur "Échec de l'interaction" !
+
+📝 À APPLIQUER :
+1. Remplacer ta fonction handleProductSelection par celle-ci
+2. Redémarrer le bot
+3. Tester l'achat de machine
+
+Maintenant tu devrais voir l'embed de confirmation au lieu de "Échec de l'interaction" !
+*/
+
 async function handleButtonClick(interaction: ButtonInteraction, user: any, services: Map<string, any>) {
+  console.log('Button interaction received:', interaction.customId);
   if (interaction.customId === 'shop_back_main') {
     await showMainShop(interaction, user, services);
   } else if (interaction.customId.startsWith('confirm_purchase_')) {
@@ -651,21 +815,23 @@ async function handleButtonClick(interaction: ButtonInteraction, user: any, serv
   } else if (interaction.customId === 'cancel_purchase') {
     await interaction.reply({
       content: '❌ Achat annulé.',
-      ephemeral: true
+      flags: MessageFlags.Ephemeral
     });
   }
 }
 
 async function handleConfirmPurchase(interaction: ButtonInteraction, user: any, services: Map<string, any>) {
   const productId = interaction.customId.replace('confirm_purchase_', '');
-  const [category, itemType] = productId.split('_');
+  const firstUnderscoreIndex = productId.indexOf('_');
+  const category = productId.substring(0, firstUnderscoreIndex);
+  const itemType = productId.substring(firstUnderscoreIndex + 1);
   
   const databaseService = services.get('database');
   const act = services.get('activity') as ActivityService;
 
   try {
     let result: any;
-
+    console.log('Processing purchase:', category, itemType, user.id);
     switch (category) {
       case 'machine':
         result = await purchaseMachineWithDollars(user.id, itemType as MachineType, databaseService, act);
@@ -836,10 +1002,19 @@ async function purchaseConsumable(userId: string, consumableType: string, databa
 async function purchaseMachineWithDollars(userId: string, machineType: keyof typeof machineInfo, databaseService: any, activityService: any): Promise<{success: boolean, message: string}> {
   const machineInfo_local = machineInfo[machineType];
   const price = machineInfo_local.dollarPrice;
-
+  
+console.log(userId);
   try {
+    // Vérifier la capacité de machines (utiliser le système existant)
+    const user = await databaseService.client.user.findUnique({
+      where: { id: userId },
+      include: { machines: true }
+    });
+
+    console.log('User found:', user);
+
     // Vérifier le solde en dollars
-    const dollarBalance = await activityService.getUserDollarBalance(userId);
+    const dollarBalance = user.dollars || 0;
     
     if (dollarBalance < price) {
       return {
@@ -848,11 +1023,17 @@ async function purchaseMachineWithDollars(userId: string, machineType: keyof typ
       };
     }
 
-    // Vérifier la capacité de machines (utiliser le système existant)
-    const user = await databaseService.client.user.findUnique({
-      where: { discordId: userId },
-      include: { machines: true }
-    });
+    console.log('Dollar balance sufficient:', dollarBalance);
+
+    const maxMachinesAllowed = getMaxMachinesForHousing(user.housingType);
+    if (user.machines.length >= maxMachinesAllowed) {
+      return {
+        success: false,
+        message: `Capacité maximale atteinte! Votre logement (${user.housingType}) ne peut accueillir que ${maxMachinesAllowed} machine(s). Utilisez /demenager pour upgrader votre logement.`
+      };
+    }
+
+    console.log('Max machines allowed:', maxMachinesAllowed);
 
     // Transaction pour acheter la machine
     await databaseService.client.$transaction(async (tx: any) => {
@@ -860,8 +1041,8 @@ async function purchaseMachineWithDollars(userId: string, machineType: keyof typ
       // (Note: Il faudrait implémenter activityService.deductDollars)
       await tx.transaction.create({
         data: {
-          userId: user.id,
-          type: 'MACHINE_PURCHASE',
+          userId: userId,
+          type: TransactionType.MACHINE_PURCHASE,
           amount: -price,
           description: `Achat machine ${machineType} pour ${price.toLocaleString()}$`
         }
@@ -870,7 +1051,7 @@ async function purchaseMachineWithDollars(userId: string, machineType: keyof typ
       // Créer la machine (utiliser la configuration du MiningService)
       await tx.machine.create({
         data: {
-          userId: user.id,
+          userId: userId,
           type: machineType,
           level: 1,
           efficiency: 100.0,
@@ -891,4 +1072,17 @@ async function purchaseMachineWithDollars(userId: string, machineType: keyof typ
       message: 'Erreur lors de l\'achat de la machine.'
     };
   }
+}
+
+function getMaxMachinesForHousing(housingType: string): number {
+  const capacities: Record<string, number> = {
+    'CHAMBRE_MAMAN': 2,
+    'STUDIO': 4,
+    'APPARTEMENT_1P': 8,
+    'APPARTEMENT_2P': 15,
+    'MAISON': 25,
+    'ENTREPOT': 50,
+    'USINE': 100
+  };
+  return capacities[housingType] || 0;
 }

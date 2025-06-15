@@ -43,7 +43,7 @@ export class HousingService {
       type: 'STUDIO',
       name: 'Studio Étudiant',
       description: 'Petit mais à toi, parfait pour commencer',
-      maxMachines: 5,
+      maxMachines: 4,
       monthlyRent: 150,
       depositRequired: 300,
       unlockRequirement: 'Avoir 500$ et 2 machines',

@@ -64,9 +64,6 @@ export async function execute(interaction: ChatInputCommandInteraction, services
     const battlesWon = completedBattles.filter(entry => entry.position === 1).length;
     const battlesLost = completedBattles.filter(entry => entry.position !== null && entry.position > 1).length;
 
-    // Get dollar balance
-    const dollarBalance = await activityService.getUserDollarBalance(interaction.user.id);
-
     // Count sabotage defenses (approximate from existing data)
     const sabotageDefenses = await databaseService.client.sabotageDefense.count({
       where: { 
@@ -85,7 +82,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         { name: '🏠 Logement', value: `${housingInfo.emoji} ${housingInfo.name}`, inline: true },
         { name: '🔧 Capacité', value: `${user.machines.length}/${housingInfo.maxMachines} machines`, inline: true },
         { name: '💰 Tokens', value: user.tokens.toFixed(2), inline: true },
-        { name: '💵 Dollars', value: `${dollarBalance.toFixed(2)}$`, inline: true },
+        { name: '💵 Dollars', value: `${user.dollars.toFixed(2)}$`, inline: true },
         { name: '⛏️ Machines', value: user.machines.length.toString(), inline: true },
         { name: '📈 Total miné', value: `${user.totalMined.toFixed(2)} tokens`, inline: true },
         { name: '⚔️ Batailles', value: `${battlesWon}W / ${battlesLost}L`, inline: true },
