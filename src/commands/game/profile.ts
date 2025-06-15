@@ -11,7 +11,9 @@ export async function execute(interaction: ChatInputCommandInteraction, services
   try {
     const activityService = services.get('activity') as ActivityService;
     const databaseService = services.get('database') as DatabaseService;
-    const housingService = services.get('housing') as HousingService;
+    
+    // Create HousingService instance locally until it's added to dependency injection
+    const housingService = new HousingService(databaseService.client);
     
     // Get user data
     const user = await databaseService.client.user.findUnique({
