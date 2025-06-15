@@ -104,6 +104,18 @@ Contactez un administrateur si vous pensez mériter cette permission.
   }
 }
 
+// 🆕 Configuration des bots de bataille
+const BATTLE_BOTS = [
+  { id: 'bot_crypto_miner_001', username: 'CryptoMiner2077', tokens: 850.5 },
+  { id: 'bot_hash_slinger_002', username: 'HashSlinger', tokens: 724.2 },
+  { id: 'bot_quantum_farm_003', username: 'QuantumFarmer', tokens: 956.8 },
+  { id: 'bot_rig_master_004', username: 'RigMaster9000', tokens: 632.1 },
+  { id: 'bot_mining_bot_005', username: 'MiningBotAlpha', tokens: 1123.7 },
+  { id: 'bot_asic_warrior_006', username: 'ASICWarrior', tokens: 445.9 },
+  { id: 'bot_gpu_overlord_007', username: 'GPUOverlord', tokens: 789.3 },
+  { id: 'bot_blockchain_ninja_008', username: 'BlockchainNinja', tokens: 567.4 }
+];
+
 async function handleCreateBattle(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   // Importer l'état des battles depuis admin-battle
   const { currentBattle } = await import('../admin/admin-battle');
@@ -141,6 +153,17 @@ async function handleCreateBattle(interaction: ChatInputCommandInteraction, serv
   if (!result.success || !result.battleId) {
     await interaction.editReply('❌ Impossible de créer la bataille !');
     return;
+  }
+
+  // 🆕 CORRECTION: Ajouter automatiquement des bots à la bataille
+  logger.info('🤖 Adding battle bots to the newly created battle...');
+  
+  try {
+    await addBattleBots(result.battleId, databaseService, battleService);
+    logger.info('✅ Battle bots added successfully');
+  } catch (error) {
+    logger.error('❌ Error adding battle bots:', error);
+    // Continue même si l'ajout des bots échoue
   }
 
   const registrationEndTime = new Date(Date.now() + registrationTime * 60 * 1000);
@@ -211,6 +234,10 @@ Que le meilleur warrior gagne ! 🏆
     }
   }, registrationTime * 60 * 1000); // Timer en millisecondes
   
+  // Récupérer le nombre réel de participants après l'ajout des bots
+  const battleInfo = await battleService.getBattleInfo(result.battleId);
+  const realParticipantCount = battleInfo?.participants || 0;
+  
   // Créer l'annonce publique
   const channel = interaction.channel as TextChannel;
   
@@ -239,7 +266,7 @@ Vous avez **${registrationTime} minutes** pour vous inscrire !
       },
       {
         name: '👥 Participants',
-        value: '5 bots déjà inscrits\n+ joueurs réels',
+        value: `${realParticipantCount} bots déjà inscrits\n+ joueurs réels`,
         inline: true
       },
       {
@@ -248,7 +275,7 @@ Vous avez **${registrationTime} minutes** pour vous inscrire !
         inline: true
       }
     ])
-    .setFooter({ text: `Battle créée par ${interaction.user.username} | ID: ${result.battleId.slice(0, 8)}... | 5 bots de test inclus` })
+    .setFooter({ text: `Battle créée par ${interaction.user.username} | ID: ${result.battleId.slice(0, 8)}... | ${realParticipantCount} bots automatiquement ajoutés` })
     .setTimestamp();
 
   // Boutons d'interaction
@@ -283,7 +310,7 @@ Vous avez **${registrationTime} minutes** pour vous inscrire !
 🆔 **Battle ID :** \`${result.battleId}\`
 ♾️ **Participants :** Illimités
 ⏰ **Durée inscription :** ${registrationTime} minutes
-🤖 **Bots de test :** 5 utilisateurs simulés ajoutés
+🤖 **Bots de test :** ${realParticipantCount} utilisateurs simulés ajoutés
 
 La bataille a été annoncée publiquement ! Que la guerre commence ! 🔥
     `)
@@ -291,7 +318,71 @@ La bataille a été annoncée publiquement ! Que la guerre commence ! 🔥
 
   await interaction.editReply({ embeds: [confirmEmbed] });
   
-  logger.info(`User ${interaction.user.id} created battle ${result.battleId} with unlimited players`);
+  logger.info(`User ${interaction.user.id} created battle ${result.battleId} with unlimited players and ${realParticipantCount} bots`);
+}
+
+// 🆕 Fonction pour ajouter automatiquement des bots à la bataille
+async function addBattleBots(battleId: string, databaseService: any, battleService: any) {
+  const botCount = 5 + Math.floor(Math.random() * 4); // 5-8 bots aléatoirement
+  const selectedBots = BATTLE_BOTS.slice(0, botCount);
+  
+  logger.info(`🤖 Adding ${botCount} bots to battle ${battleId}`);
+  
+  for (const bot of selectedBots) {
+    try {
+      // Vérifier si l'utilisateur bot existe déjà
+      let botUser = await databaseService.client.user.findUnique({
+        where: { discordId: bot.id }
+      });
+
+      // Créer le bot s'il n'existe pas
+      if (!botUser) {
+        botUser = await databaseService.client.user.create({
+          data: {
+            discordId: bot.id,
+            username: bot.username,
+            tokens: bot.tokens,
+            dollars: 0.0
+          }
+        });
+        logger.info(`🤖 Created bot user: ${bot.username} (${bot.id})`);
+      }
+
+      // Vérifier s'il n'est pas déjà dans la bataille
+      const existingEntry = await databaseService.client.battleEntry.findUnique({
+        where: { 
+          battleId_userId: { 
+            battleId: battleId, 
+            userId: botUser.id
+          } 
+        }
+      });
+
+      if (!existingEntry) {
+        // Ajouter le bot à la bataille
+        await databaseService.client.battleEntry.create({
+          data: {
+            battleId: battleId,
+            userId: botUser.id
+          }
+        });
+
+        // Mettre à jour le prize pool
+        await databaseService.client.battle.update({
+          where: { id: battleId },
+          data: { prizePool: { increment: 5 } }
+        });
+
+        logger.info(`✅ Bot ${bot.username} added to battle ${battleId}`);
+      } else {
+        logger.info(`⚠️ Bot ${bot.username} already in battle ${battleId}`);
+      }
+
+    } catch (error) {
+      logger.error(`❌ Error adding bot ${bot.username} to battle:`, error);
+      // Continue avec les autres bots même si un échoue
+    }
+  }
 }
 
 // Fonctions pour les autres sous-commandes (join, info, leaderboard)
