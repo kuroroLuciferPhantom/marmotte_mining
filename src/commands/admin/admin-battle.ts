@@ -18,10 +18,6 @@ export const data = new SlashCommandBuilder()
           .setMaxValue(30)))
   .addSubcommand(subcommand =>
     subcommand
-      .setName('force-end')
-      .setDescription('🛑 Force la fin de la bataille en cours'))
-  .addSubcommand(subcommand =>
-    subcommand
       .setName('status')
       .setDescription('📊 Statut de la bataille actuelle'))
   .addSubcommand(subcommand =>
@@ -204,10 +200,6 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         await handleStartBattle(interaction, services);
         break;
       
-      case 'force-end':
-        await handleForceEnd(interaction, services);
-        break;
-      
       case 'status':
         await handleStatus(interaction);
         break;
@@ -308,8 +300,6 @@ async function addBattleBots(battleId: string, databaseService: any, battleServi
     }
   }
 }
-
-// ============ NOUVELLES FONCTIONS DE GESTION DES PERMISSIONS ============
 
 async function handleGrantPermission(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   const targetUser = interaction.options.getUser('utilisateur') as DiscordUser;
@@ -518,7 +508,6 @@ async function handleCheckPermission(interaction: ChatInputCommandInteraction, s
   await interaction.editReply({ embeds: [embed] });
 }
 
-// ============ FONCTIONS EXISTANTES (START, FORCE-END, STATUS) ============
 
 async function handleStartBattle(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   // Vérifier qu'il n'y a pas déjà une bataille
@@ -668,61 +657,6 @@ La bataille a été annoncée publiquement !
   await interaction.editReply({ embeds: [confirmEmbed] });
   
   logger.info(`Admin ${interaction.user.id} started battle ${result.battleId} with unlimited players and ${realParticipantCount} bots`);
-}
-
-async function handleForceEnd(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
-  if (!currentBattle) {
-    await interaction.editReply('❌ Aucune bataille en cours !');
-    return;
-  }
-
-  const databaseService = services.get('database');
-  const cacheService = services.get('cache');
-  
-  // Créer le BattleService dynamiquement
-  const { BattleService } = await import('../../services/battle/BattleService');
-  const battleService = new BattleService(databaseService, cacheService);
-  
-  const result = await battleService.cancelBattle(currentBattle.id);
-  
-  // Mettre à jour le message d'annonce
-  try {
-    const channel = await interaction.client.channels.fetch(currentBattle.channelId) as TextChannel;
-    const message = await channel.messages.fetch(currentBattle.messageId);
-    
-    const cancelledEmbed = new EmbedBuilder()
-      .setTitle('🛑 BATAILLE ANNULÉE')
-      .setColor(0xff0000)
-      .setDescription(`
-**La bataille a été interrompue par un admin !**
-
-${result.success ? '✅ Bataille annulée avec succès.' : '❌ Erreur lors de l\'annulation.'}
-
-*"Sometimes the only winning move is not to play..." - WarGames*
-      `)
-      .setTimestamp();
-
-    await message.edit({ embeds: [cancelledEmbed], components: [] });
-  } catch (error) {
-    logger.error('Error updating cancelled battle message:', error);
-  }
-
-  currentBattle = null;
-  
-  const embed = new EmbedBuilder()
-    .setTitle('🛑 Bataille Terminée')
-    .setColor(0xff0000)
-    .setDescription(`
-**Action :** Bataille forcée à terminer
-**Résultat :** ${result.success ? 'Bataille annulée' : 'Échec'}
-
-${result.message}
-    `)
-    .setTimestamp();
-
-  await interaction.editReply({ embeds: [embed] });
-  
-  logger.info(`Admin ${interaction.user.id} force-ended current battle`);
 }
 
 async function handleStatus(interaction: ChatInputCommandInteraction) {

@@ -1,4 +1,5 @@
 import { Client, Collection, REST, Routes, ButtonInteraction } from 'discord.js';
+import { handleLeaderboardButtonInteraction } from '../services/leaderboard/LeaderboardInteractionHandler';
 import { config } from '../config/config';
 import { logger } from '../utils/logger';
 import fs from 'fs';
@@ -129,7 +130,7 @@ export class CommandManager {
     logger.info('✅ Command handler setup complete');
   }
 
-  // NOUVELLE MÉTHODE : Gestion des boutons de bataille
+
   private async handleBattleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
     try {
       // Import dynamique pour éviter les dépendances circulaires
@@ -155,6 +156,44 @@ export class CommandManager {
       }
     }
   }
+
+  private setupInteractionHandlers(): void {
+    this.client.on('interactionCreate', async (interaction: any) => {
+      try {
+        // Routage vers les handlers spécialisés
+        if (this.isLeaderboardInteraction(interaction)) {
+          const { handleLeaderboardButtonInteraction } = await import('../services/leaderboard/LeaderboardInteractionHandler');
+          await handleLeaderboardButtonInteraction(interaction, this.services.get('database'));
+          return;
+        }
+
+        if (this.isBattleInteraction(interaction)) {
+          const { handleBattleButtonInteraction } = await import('../services/battle/BattleInteractionHandler');
+          await handleBattleButtonInteraction(interaction, this.services.get('database'), this.services.get('cache'));
+          return;
+        }
+
+        // ... autres interactions existantes ...
+      } catch (error) {
+        logger.error('Error in interaction handler:', error);
+      }
+    });
+  }
+
+  // Méthodes de détection simples
+  private isLeaderboardInteraction(interaction: any): boolean {
+    return (interaction.isStringSelectMenu() && interaction.customId === 'leaderboard_navigation') ||
+          (interaction.isButton() && interaction.customId === 'leaderboard_refresh');
+  }
+
+  private isBattleInteraction(interaction: any): boolean {
+    return (interaction.isButton() && 
+            (interaction.customId === 'battle_create_quick' ||
+            interaction.customId.startsWith('battle_create_') ||
+            interaction.customId.startsWith('join_battle_') ||
+            interaction.customId.startsWith('info_battle_')));
+  }
+
 
   getCommands(): Collection<string, any> {
     return this.commands;
