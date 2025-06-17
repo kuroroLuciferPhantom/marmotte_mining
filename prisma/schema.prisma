@@ -120,6 +120,14 @@ model User {
   // Monnaies
   dollars     Float    @default(0.0)
   tokens      Float    @default(100.0)
+
+  //missionAttempts
+  energy      Float    @default(100.0)    // Énergie pour missions (max 100)
+  level       Int      @default(1)        // Niveau utilisateur (bonus missions)
+  lastMission DateTime?                   // Dernière mission pour cooldown
+  experience     Int   @default(0)        // Points d'expérience actuels
+  experienceToNext Int @default(100)      // XP nécessaire pour niveau suivant
+
   
   // Mining
   miningActive        Boolean   @default(false)

@@ -153,11 +153,6 @@ export class CardService {
         throw new Error("Utilisateur introuvable");
       }
 
-      // Vérifier l'énergie
-      if (user.energy < config.energyCost) {
-        throw new Error(`Énergie insuffisante ! Il vous faut ${config.energyCost} d'énergie.`);
-      }
-
       // Calculer le succès
       let successRate = config.baseSuccessRate;
       // Bonus basé sur le niveau de l'utilisateur
@@ -179,7 +174,7 @@ export class CardService {
 
       for (const reward of rewards) {
         if (Math.random() < reward.chance) {
-          await this.applyReward(userId, reward);
+          await this.applyReward(user.discordId, reward);
           obtainedRewards.push(reward);
         }
       }
@@ -388,9 +383,9 @@ export class CardService {
 
       // Ajouter la carte
       if (cardType === 'attackCard') {
-        await this.addAttackCard(userId, result.cardType, result.rarity);
+        await this.addAttackCard(userId, result.cardType as AttackType, result.rarity);
       } else {
-        await this.addDefenseCard(userId, result.cardType, result.rarity);
+        await this.addDefenseCard(userId, result.cardType as DefenseType, result.rarity);
       }
 
       logger.info(`Card crafted`, {
@@ -417,9 +412,13 @@ export class CardService {
   async recycleCard(userId: string, cardId: string, cardType: 'attack' | 'defense'): Promise<any> {
     try {
       const table = cardType === 'attack' ? 'attackCard' : 'defenseCard';
-      const card = await this.database[table].findFirst({
-        where: { id: cardId, userId: userId }
-      });
+      const card = cardType === 'attack'
+        ? await (this.database.attackCard.findFirst({
+            where: { id: cardId, userId: userId }
+          }))
+        : await (this.database.defenseCard.findFirst({
+            where: { id: cardId, userId: userId }
+          }));
 
       if (!card || card.quantity <= 0) {
         throw new Error("Carte introuvable ou quantité insuffisante");
@@ -440,12 +439,23 @@ export class CardService {
 
       // Supprimer la carte
       if (card.quantity === 1) {
-        await this.database[table].delete({ where: { id: cardId } });
+        if (cardType === 'attack') {
+          await this.database.attackCard.delete({ where: { id: cardId } });
+        } else {
+          await this.database.defenseCard.delete({ where: { id: cardId } });
+        }
       } else {
-        await this.database[table].update({
-          where: { id: cardId },
-          data: { quantity: { decrement: 1 } }
-        });
+        if (cardType === 'attack') {
+          await this.database.attackCard.update({
+            where: { id: cardId },
+            data: { quantity: { decrement: 1 } }
+          });
+        } else {
+          await this.database.defenseCard.update({
+            where: { id: cardId },
+            data: { quantity: { decrement: 1 } }
+          });
+        }
       }
 
       // Ajouter les fragments

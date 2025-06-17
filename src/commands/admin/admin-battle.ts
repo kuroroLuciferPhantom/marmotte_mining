@@ -57,6 +57,18 @@ export const data = new SlashCommandBuilder()
           .setDescription('L\'utilisateur à vérifier')
           .setRequired(true)));
 
+// 🆕 Configuration des bots de bataille (identique à battle.ts)
+const BATTLE_BOTS = [
+  { id: 'bot_crypto_miner_001', username: 'CryptoMiner2077', tokens: 850.5 },
+  { id: 'bot_hash_slinger_002', username: 'HashSlinger', tokens: 724.2 },
+  { id: 'bot_quantum_farm_003', username: 'QuantumFarmer', tokens: 956.8 },
+  { id: 'bot_rig_master_004', username: 'RigMaster9000', tokens: 632.1 },
+  { id: 'bot_mining_bot_005', username: 'MiningBotAlpha', tokens: 1123.7 },
+  { id: 'bot_asic_warrior_006', username: 'ASICWarrior', tokens: 445.9 },
+  { id: 'bot_gpu_overlord_007', username: 'GPUOverlord', tokens: 789.3 },
+  { id: 'bot_blockchain_ninja_008', username: 'BlockchainNinja', tokens: 567.4 }
+];
+
 // Événements de bataille thématiques mining/crypto/hack
 const MINING_BATTLE_EVENTS = {
   // Événements d'entrée
@@ -230,6 +242,70 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       .setTimestamp();
 
     await interaction.editReply({ embeds: [errorEmbed] });
+  }
+}
+
+// 🆕 Fonction pour ajouter automatiquement des bots à la bataille (identique à battle.ts)
+async function addBattleBots(battleId: string, databaseService: any, battleService: any) {
+  const botCount = 5 + Math.floor(Math.random() * 4); // 5-8 bots aléatoirement
+  const selectedBots = BATTLE_BOTS.slice(0, botCount);
+  
+  logger.info(`🤖 [admin-battle] Adding ${botCount} bots to battle ${battleId}`);
+  
+  for (const bot of selectedBots) {
+    try {
+      // Vérifier si l'utilisateur bot existe déjà
+      let botUser = await databaseService.client.user.findUnique({
+        where: { discordId: bot.id }
+      });
+
+      // Créer le bot s'il n'existe pas
+      if (!botUser) {
+        botUser = await databaseService.client.user.create({
+          data: {
+            discordId: bot.id,
+            username: bot.username,
+            tokens: bot.tokens,
+            dollars: 0.0
+          }
+        });
+        logger.info(`🤖 [admin-battle] Created bot user: ${bot.username} (${bot.id})`);
+      }
+
+      // Vérifier s'il n'est pas déjà dans la bataille
+      const existingEntry = await databaseService.client.battleEntry.findUnique({
+        where: { 
+          battleId_userId: { 
+            battleId: battleId, 
+            userId: botUser.id
+          } 
+        }
+      });
+
+      if (!existingEntry) {
+        // Ajouter le bot à la bataille
+        await databaseService.client.battleEntry.create({
+          data: {
+            battleId: battleId,
+            userId: botUser.id
+          }
+        });
+
+        // Mettre à jour le prize pool
+        await databaseService.client.battle.update({
+          where: { id: battleId },
+          data: { prizePool: { increment: 5 } }
+        });
+
+        logger.info(`✅ [admin-battle] Bot ${bot.username} added to battle ${battleId}`);
+      } else {
+        logger.info(`⚠️ [admin-battle] Bot ${bot.username} already in battle ${battleId}`);
+      }
+
+    } catch (error) {
+      logger.error(`❌ [admin-battle] Error adding bot ${bot.username} to battle:`, error);
+      // Continue avec les autres bots même si un échoue
+    }
   }
 }
 
@@ -468,7 +544,22 @@ async function handleStartBattle(interaction: ChatInputCommandInteraction, servi
     return;
   }
 
+  // 🆕 CORRECTION: Ajouter automatiquement des bots à la bataille
+  logger.info('🤖 [admin-battle] Adding battle bots to the newly created battle...');
+  
+  try {
+    await addBattleBots(result.battleId, databaseService, battleService);
+    logger.info('✅ [admin-battle] Battle bots added successfully');
+  } catch (error) {
+    logger.error('❌ [admin-battle] Error adding battle bots:', error);
+    // Continue même si l'ajout des bots échoue
+  }
+
   const registrationEndTime = new Date(Date.now() + registrationTime * 60 * 1000);
+  
+  // Récupérer le nombre réel de participants après l'ajout des bots
+  const battleInfo = await battleService.getBattleInfo(result.battleId);
+  const realParticipantCount = battleInfo?.participants || 0;
   
   // Créer l'annonce publique
   const channel = interaction.channel as TextChannel;
@@ -500,7 +591,7 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
       },
       {
         name: '👥 Participants',
-        value: '5 bots déjà inscrits\n+ joueurs réels',
+        value: `${realParticipantCount} bots déjà inscrits\n+ joueurs réels`,
         inline: true
       },
       {
@@ -510,7 +601,7 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
       }
     ])
     .setImage('https://media.giphy.com/media/26tn33aiTi1jkl6H6/giphy.gif')
-    .setFooter({ text: `Battle ID: ${result.battleId.slice(0, 8)}... | Lancée par ${interaction.user.username} | 5 bots de test inclus` })
+    .setFooter({ text: `Battle ID: ${result.battleId.slice(0, 8)}... | Lancée par ${interaction.user.username} | ${realParticipantCount} bots automatiquement ajoutés` })
     .setTimestamp();
 
   // Bouton de participation
@@ -568,7 +659,7 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
 **Participants :** Illimités
 **Temps d'inscription :** ${registrationTime} minutes
 **Status :** En attente de participants
-**Bots de test :** 5 utilisateurs simulés ajoutés
+**Bots de test :** ${realParticipantCount} utilisateurs simulés ajoutés
 
 La bataille a été annoncée publiquement !
     `)
@@ -576,7 +667,7 @@ La bataille a été annoncée publiquement !
 
   await interaction.editReply({ embeds: [confirmEmbed] });
   
-  logger.info(`Admin ${interaction.user.id} started battle ${result.battleId} with unlimited players`);
+  logger.info(`Admin ${interaction.user.id} started battle ${result.battleId} with unlimited players and ${realParticipantCount} bots`);
 }
 
 async function handleForceEnd(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
@@ -813,6 +904,7 @@ Suivez les événements en temps réel...
   }
 }
 
+// 🆕 Fonction de simulation corrigée avec plus d'éliminations
 async function simulateEpicBattle(battleId: string, channel: TextChannel, services: Map<string, any>) {
   try {
     const databaseService = services.get('database');
@@ -833,32 +925,45 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
       revived: false
     }));
 
-    // Générer des événements de combat épiques avec événements aléatoires
+    // 🔧 PARAMÈTRES AJUSTÉS pour plus d'action
     let eventCount = 0;
-    const maxEvents = 20 + Math.floor(Math.random() * 15); // 20-35 événements pour plus de fun
+    const participantCount = participants.length;
 
-    while (participants.filter((p: any) => !p.eliminated).length > 1 && eventCount < maxEvents) {
-      await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000)); // 2-5 secondes
+    logger.info(`🎮 [Battle ${battleId}] Starting with ${participantCount} participants - Battle will continue until 1 survivor remains`);
+
+    while (participants.filter((p: any) => !p.eliminated).length > 1) {
+      await new Promise(resolve => setTimeout(resolve, 1500 + Math.random() * 2000)); // 1.5-3.5 secondes (plus rapide)
 
       const alive = participants.filter((p: any) => !p.eliminated);
       if (alive.length <= 1) break;
 
-      const eventType = getRandomEventType();
+      // 🎯 LOGIQUE D'ÉLIMINATION PROGRESSIVE
+      // Plus on avance, plus les éliminations sont fréquentes
+      const progressRatio = Math.min(1.0, eventCount / (participantCount * 1.5)); // Basé sur nombre initial de participants
+      const aliveCount = alive.length;
+      
+      // Force l'élimination si trop de participants restants par rapport au nombre d'événements
+      const shouldForceElimination = (aliveCount > participantCount * 0.3) && (eventCount > participantCount * 0.8);
+      
+      const eventType = getRandomEventType(aliveCount, progressRatio);
       let eventMessage = '';
+      let eliminationOccurred = false;
 
       if (eventType === 'apocalypse') {
-        // 🆕 Événement Apocalypse - Tue plusieurs participants
-        const killCount = Math.floor(alive.length * (0.3 + Math.random() * 0.3)); // 30-60%
-        if (killCount > 0 && alive.length > 2) {
+        // 🌋 Événement Apocalypse - Tue PLUSIEURS participants
+        const minKills = Math.max(1, Math.floor(alive.length * 0.2)); // Au moins 20%
+        const maxKills = Math.max(minKills, Math.floor(alive.length * 0.5)); // Jusqu'à 50%
+        const killCount = minKills + Math.floor(Math.random() * (maxKills - minKills + 1));
+        
+        if (killCount > 0 && alive.length > killCount) {
           const victims = [];
-          for (let i = 0; i < Math.min(killCount, alive.length - 1); i++) {
+          for (let i = 0; i < killCount; i++) {
+            if (alive.length <= 1) break;
             const randomIndex = Math.floor(Math.random() * alive.length);
             const victim = alive[randomIndex];
-            if (!victim.eliminated) {
-              victim.eliminated = true;
-              victims.push(victim.username);
-              alive.splice(randomIndex, 1);
-            }
+            victim.eliminated = true;
+            victims.push(victim.username);
+            alive.splice(randomIndex, 1);
           }
           
           if (victims.length > 0) {
@@ -866,13 +971,16 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
               Math.floor(Math.random() * MINING_BATTLE_EVENTS.apocalypse.length)
             ];
             eventMessage = `${apocalypseMsg}\n\n💀 **VICTIMES:** ${victims.join(', ')} sont éliminés !`;
+            eliminationOccurred = true;
+            logger.info(`💥 [Battle ${battleId}] Apocalypse eliminated ${victims.length} participants`);
           }
         }
-      } else if (eventType === 'revival') {
-        // 🆕 Événement Résurrection - Ranime des participants
+        
+      } else if (eventType === 'revival' && progressRatio < 0.7) {
+        // ✨ Résurrection (seulement en début/milieu de bataille)
         const dead = participants.filter((p: any) => p.eliminated && !p.revived);
         if (dead.length > 0) {
-          const reviveCount = Math.min(3, Math.floor(Math.random() * 3) + 1);
+          const reviveCount = Math.min(2, Math.floor(Math.random() * 2) + 1); // 1-2 ressuscités max
           const revived = [];
           
           for (let i = 0; i < Math.min(reviveCount, dead.length); i++) {
@@ -889,17 +997,20 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
               Math.floor(Math.random() * MINING_BATTLE_EVENTS.revival.length)
             ];
             eventMessage = `${revivalMsg}\n\n✨ **RESSUSCITÉS:** ${revived.join(', ')} reviennent dans la bataille !`;
+            logger.info(`✨ [Battle ${battleId}] Revival brought back ${revived.length} participants`);
           }
         }
+        
       } else if (eventType === 'boost') {
-        // 🆕 Événement Boost - Boost un joueur
+        // 🚀 Boost - Aucune élimination mais message cool
         const boosted = alive[Math.floor(Math.random() * alive.length)];
         const boostMsg = MINING_BATTLE_EVENTS.boost[
           Math.floor(Math.random() * MINING_BATTLE_EVENTS.boost.length)
         ].replace('{username}', `**${boosted.username}**`);
         eventMessage = boostMsg;
+        
       } else {
-        // Combat normal
+        // ⚔️ Combat normal avec élimination PLUS FRÉQUENTE
         const attacker = alive[Math.floor(Math.random() * alive.length)];
         const targets = alive.filter((p: any) => p.userId !== attacker.userId);
         if (targets.length === 0) break;
@@ -927,43 +1038,71 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
            .replace('{defender}', `**${defender.username}**`);
         }
 
-        // Chance d'élimination normale (réduite car il y a les événements apocalypse)
-        const eliminationChance = 0.2 + (eventCount / maxEvents) * 0.3;
-        if (Math.random() < eliminationChance && alive.length > 2) {
+        // 🎯 CHANCE D'ÉLIMINATION ADAPTATIVE
+        let eliminationChance = 0.4; // Base 40% (augmenté)
+        
+        // Bonus selon le nombre de participants restants
+        if (aliveCount > participantCount * 0.75) eliminationChance += 0.3; // +30% si >75% restants
+        else if (aliveCount > participantCount * 0.5) eliminationChance += 0.2; // +20% si >50% restants
+        else if (aliveCount > participantCount * 0.25) eliminationChance += 0.1; // +10% si >25% restants
+        
+        // Bonus temporel basé sur le nombre d'événements
+        eliminationChance += Math.min(0.3, eventCount * 0.02); // +2% par événement, max +30%
+        
+        // Force l'élimination dans certains cas
+        if (shouldForceElimination) eliminationChance += 0.4; // +40% si on force
+        if (aliveCount <= 3) eliminationChance += 0.2; // +20% si finale proche
+        
+        eliminationChance = Math.min(0.9, eliminationChance); // Max 90% de chance
+
+        if (Math.random() < eliminationChance && alive.length > 1) {
           defender.eliminated = true;
+          eliminationOccurred = true;
           
           const elimMessage = MINING_BATTLE_EVENTS.elimination[
             Math.floor(Math.random() * MINING_BATTLE_EVENTS.elimination.length)
           ].replace('{username}', `**${defender.username}**`);
 
           eventMessage += `\n\n🚨 **ÉLIMINATION !** ${elimMessage}`;
+          logger.info(`💀 [Battle ${battleId}] Combat elimination: ${defender.username} (chance: ${(eliminationChance * 100).toFixed(1)}%)`);
         }
       }
 
       if (eventMessage) {
+        const aliveCount = participants.filter((p: any) => !p.eliminated).length;
+        
         const embed = new EmbedBuilder()
           .setColor(eventType === 'apocalypse' ? 0xff0000 : eventType === 'revival' ? 0x00ff00 : eventType === 'boost' ? 0xffd700 : 0xff6600)
           .setDescription(eventMessage)
-          .setFooter({ text: `⚔️ ${participants.filter((p: any) => !p.eliminated).length} combattants restants | Événement ${eventCount + 1}/${maxEvents}` })
+          .setFooter({ 
+            text: `⚔️ ${aliveCount} combattants restants | Événement ${eventCount + 1} | ${eliminationOccurred ? '💀 ÉLIMINATION' : '📊 Événement'}` 
+          })
           .setTimestamp();
 
         await channel.send({ embeds: [embed] });
+
+        // 🏁 CONDITION D'ARRÊT : Un seul survivant
+        if (aliveCount <= 1) {
+          logger.info(`🏁 [Battle ${battleId}] Battle ended: ${aliveCount} participant(s) remaining after ${eventCount + 1} events`);
+          break;
+        }
       }
 
       eventCount++;
     }
 
-    // Annoncer le vainqueur
+    // 🏆 ANNONCE DU VAINQUEUR (si il y en a un)
     const winner = participants.find((p: any) => !p.eliminated);
     if (winner) {
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       const victoryMessage = MINING_BATTLE_EVENTS.victory[
         Math.floor(Math.random() * MINING_BATTLE_EVENTS.victory.length)
       ].replace('{username}', `**${winner.username}**`);
 
       const finalStats = participants.filter((p: any) => !p.eliminated).length;
-      const totalParticipants = participants.length;
+      const revivedCount = participants.filter((p: any) => p.revived).length;
+      const eliminationRate = ((participantCount - finalStats) / participantCount * 100).toFixed(1);
 
       const victoryEmbed = new EmbedBuilder()
         .setTitle('🏆 VICTOIRE ÉPIQUE ! 🏆')
@@ -975,10 +1114,11 @@ ${victoryMessage}
 *"In the matrix of mining, ${winner.username} found the ultimate algorithm..."*
 
 **📊 STATISTIQUES FINALES:**
-• **Total participants:** ${totalParticipants}
-• **Survivants:** ${finalStats}
-• **Événements déclenchés:** ${eventCount}
-• **Ressuscitations:** ${participants.filter((p: any) => p.revived).length}
+• **Total participants:** ${participantCount}
+• **Survivant final:** ${winner.username} 🏆
+• **Total événements:** ${eventCount}
+• **Ressuscitations:** ${revivedCount}
+• **Taux d'élimination:** ${eliminationRate}%
 
 Les récompenses sont en cours de distribution...
         `)
@@ -989,6 +1129,12 @@ Les récompenses sont en cours de distribution...
 
       // Terminer la bataille dans le service
       currentBattle = null;
+      
+      logger.info(`🏁 [Battle ${battleId}] Completed: ${winner.username} wins after ${eventCount} events (${participantCount}→1 participants)`);
+    } else {
+      // Cas d'erreur - ne devrait jamais arriver
+      logger.error(`❌ [Battle ${battleId}] No winner found after ${eventCount} events`);
+      currentBattle = null;
     }
 
   } catch (error) {
@@ -996,12 +1142,37 @@ Les récompenses sont en cours de distribution...
   }
 }
 
-function getRandomEventType(): 'combat' | 'apocalypse' | 'revival' | 'boost' {
+// 🆕 Fonction améliorée pour choisir le type d'événement selon le contexte
+function getRandomEventType(aliveCount: number, progressRatio: number): 'combat' | 'apocalypse' | 'revival' | 'boost' {
   const rand = Math.random();
-  if (rand < 0.1) return 'apocalypse';      // 10% chance d'apocalypse
-  if (rand < 0.2) return 'revival';         // 10% chance de résurrection  
-  if (rand < 0.35) return 'boost';          // 15% chance de boost
-  return 'combat';                          // 65% combat normal
+  
+  // FINALE (2-3 joueurs restants) - Combat intense, pas de revival
+  if (aliveCount <= 3) {
+    if (rand < 0.15) return 'apocalypse';    // 15% apocalypse finale
+    if (rand < 0.25) return 'boost';         // 10% boost dramatique
+    return 'combat';                         // 75% combat final
+  }
+  
+  // PHASE FINALE (25% des participants restants)
+  if (progressRatio > 0.7 || aliveCount <= Math.max(2, aliveCount * 0.25)) {
+    if (rand < 0.20) return 'apocalypse';    // 20% apocalypse
+    if (rand < 0.25) return 'boost';         // 5% boost
+    return 'combat';                         // 75% combat (pas de revival)
+  }
+  
+  // PHASE MILIEU (bataille équilibrée)
+  if (progressRatio > 0.3) {
+    if (rand < 0.12) return 'apocalypse';    // 12% apocalypse
+    if (rand < 0.22) return 'revival';       // 10% revival
+    if (rand < 0.32) return 'boost';         // 10% boost
+    return 'combat';                         // 68% combat
+  }
+  
+  // PHASE DÉBUT (plus d'événements fun)
+  if (rand < 0.06) return 'apocalypse';      // 6% apocalypse
+  if (rand < 0.16) return 'revival';         // 10% revival
+  if (rand < 0.31) return 'boost';           // 15% boost
+  return 'combat';                           // 69% combat
 }
 
 // Export pour les autres modules
