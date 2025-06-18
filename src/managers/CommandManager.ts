@@ -116,7 +116,6 @@ export class CommandManager {
         }
       }
       
-      // NOUVEAU : Gestion des boutons de bataille
       else if (interaction.isButton()) {
         const customId = interaction.customId;
         
@@ -124,6 +123,22 @@ export class CommandManager {
           await this.handleBattleButtonInteraction(interaction as ButtonInteraction);
         }
         // Ici tu peux ajouter d'autres boutons existants si tu en as
+      }
+
+      if ((interaction.isButton() && interaction.customId === 'leaderboard_refresh') ||
+        (interaction.isStringSelectMenu() && interaction.customId === 'leaderboard_navigation')) {
+      
+        const databaseService = this.services.get('database');
+        if (!databaseService) {
+          await interaction.reply({ 
+            content: '❌ Service de base de données indisponible.', 
+            ephemeral: true 
+          });
+          return;
+        }
+        
+        await handleLeaderboardButtonInteraction(interaction, databaseService);
+        return;
       }
     });
 

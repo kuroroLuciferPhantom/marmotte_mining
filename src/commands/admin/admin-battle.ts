@@ -887,9 +887,25 @@ async function finalizeBattleWithResults(battleId: string, channel: TextChannel,
         // Ajouter les tokens au joueur dans la base de données
         try {
           await databaseService.client.user.update({
-            where: { discordId: participant.userId },
+            where: { id: participant.userId },
             data: { tokens: { increment: reward.tokens } }
           });
+
+          const isWin = position == 1; // Top 1 = victoire
+
+          if (isWin) {
+            await databaseService.client.user.update({
+              where: { id: participant.userId },
+              data: { battlesWon: { increment: 1 } }
+            });
+            logger.info(`📊 [Battle] ${participant.username} battle win recorded`);
+          } else {
+            await databaseService.client.user.update({
+              where: { id: participant.userId },
+              data: { battlesLost: { increment: 1 } }
+            });
+            logger.info(`📊 [Battle] ${participant.username} battle loss recorded`);
+          }
           
           rewardResults.push({
             position,
