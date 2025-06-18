@@ -236,7 +236,6 @@ async function showDollarsLeaderboard(interaction: ChatInputCommandInteraction, 
       discordId: true,
       username: true,
       dollars: true,
-      loginStreak: true
     }
   });
 
@@ -264,9 +263,8 @@ async function showDollarsLeaderboard(interaction: ChatInputCommandInteraction, 
           const medal = getMedal(index + 1);
           const isCurrentUser = user.discordId === interaction.user.id;
           const userTag = isCurrentUser ? '**→ VOUS ←**' : '';
-          const streakEmoji = user.loginStreak > 7 ? '🔥' : user.loginStreak > 3 ? '⚡' : '';
           
-          return `${medal} **${index + 1}.** ${user.username} ${userTag}\n💵 **${user.dollars.toFixed(2)}$** ${streakEmoji} Streak: ${user.loginStreak}j`;
+          return `${medal} **${index + 1}.** ${user.username} ${userTag}\n💵 **${user.dollars.toFixed(2)}$**`;
         }).join('\n\n'),
         inline: false
       },

@@ -11,6 +11,7 @@ import { CardService } from './services/sabotage/CardService';
 import { BlackMarketService } from './services/sabotage/BlackMarketService';
 import { TokenPriceService } from './services/token-price/TokenPriceService';
 import { TokenMarketService } from './services/token-price/TokenMarketService';
+import { MachineMaintenanceService } from './services/maintenance/MachineMaintenanceService';
 import { CommandManager } from './managers/CommandManager';
 
 // Import de l'interface et du mock
@@ -109,6 +110,12 @@ class MarmotteMiningBot {
 
     const blackMarketService = new BlackMarketService(databaseService.client);
     this.services.set('blackmarket', blackMarketService);
+
+    const maintenanceService = new MachineMaintenanceService(databaseService, miningService);
+    this.services.set('maintenance', maintenanceService);
+
+    // Démarre la boucle de maintenance automatique
+    maintenanceService.startMaintenanceLoop();
 
     logger.info('✅ All services initialized successfully');
   }
@@ -308,6 +315,8 @@ class MarmotteMiningBot {
       if (this.marketRefreshInterval) clearInterval(this.marketRefreshInterval);
       if (this.energyRegenInterval) clearInterval(this.energyRegenInterval);
       if (this.tokenPriceInterval) clearInterval(this.tokenPriceInterval);
+      const maintenanceService = this.services.get('maintenance') as MachineMaintenanceService;
+      maintenanceService.stopMaintenanceLoop();
 
       const database = this.services.get('database');
       if (database) {

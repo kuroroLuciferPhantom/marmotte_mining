@@ -835,6 +835,197 @@ Suivez les événements en temps réel...
   }
 }
 
+interface BattleParticipant {
+  id: string;
+  userId: string;
+  username: string;
+  eliminated: boolean;
+  revived: boolean;
+  eliminationOrder?: number;  // 🆕 Position d'élimination
+  eliminationTime?: Date;     // 🆕 Moment de l'élimination
+  tokens?: number;            // 🆕 Pour afficher les stats
+}
+
+// 🆕 Configuration des récompenses
+const BATTLE_REWARDS = {
+  1: { tokens: 100, title: "🥇 CHAMPION SUPRÊME" },
+  2: { tokens: 50, title: "🥈 VICE-CHAMPION" },
+  3: { tokens: 25, title: "🥉 PODIUM" },
+  4: { tokens: 10, title: "🏅 TOP 5" },
+  5: { tokens: 5, title: "🏅 TOP 5" }
+};
+
+// 🆕 Fonction pour tracker les éliminations
+async function trackElimination(participant: BattleParticipant, currentOrder: number) {
+  participant.eliminated = true;
+  participant.eliminationOrder = currentOrder;
+  participant.eliminationTime = new Date();
+  
+  logger.info(`💀 [Battle] ${participant.username} eliminated at position ${currentOrder}`);
+}
+
+// 🆕 Fonction améliorée pour terminer la bataille avec résultats complets
+async function finalizeBattleWithResults(battleId: string, channel: TextChannel, participants: BattleParticipant[], eventCount: number, services: Map<string, any>) {
+  try {
+    const databaseService = services.get('database');
+    
+    // 🏆 CALCULER LE CLASSEMENT FINAL
+    const alive = participants.filter(p => !p.eliminated);
+    const eliminated = participants.filter(p => p.eliminated).sort((a, b) => (b.eliminationOrder || 0) - (a.eliminationOrder || 0));
+    
+    // Le/les survivant(s) sont 1ers, puis les éliminés par ordre inverse d'élimination
+    const finalRanking = [...alive, ...eliminated];
+    
+    // 🎁 DISTRIBUER LES RÉCOMPENSES
+    const rewardResults = [];
+    for (let i = 0; i < Math.min(5, finalRanking.length); i++) {
+      const participant = finalRanking[i];
+      const position = i + 1;
+      const reward = BATTLE_REWARDS[position as keyof typeof BATTLE_REWARDS];
+      
+      if (reward) {
+        // Ajouter les tokens au joueur dans la base de données
+        try {
+          await databaseService.client.user.update({
+            where: { discordId: participant.userId },
+            data: { tokens: { increment: reward.tokens } }
+          });
+          
+          rewardResults.push({
+            position,
+            username: participant.username,
+            reward: reward.tokens,
+            title: reward.title,
+            eliminated: participant.eliminated,
+            eliminationOrder: participant.eliminationOrder || null
+          });
+          
+          logger.info(`🎁 [Battle] ${participant.username} received ${reward.tokens} tokens for position ${position}`);
+        } catch (error) {
+          logger.error(`❌ Error rewarding ${participant.username}:`, error);
+        }
+      }
+    }
+
+    // 📊 CRÉER L'EMBED DE RÉSULTATS COMPLETS
+    await new Promise(resolve => setTimeout(resolve, 3000));
+
+    // 1️⃣ Message de victoire spectaculaire
+    const winner = finalRanking[0];
+    const victoryMessage = MINING_BATTLE_EVENTS.victory[
+      Math.floor(Math.random() * MINING_BATTLE_EVENTS.victory.length)
+    ].replace('{username}', `**${winner.username}**`);
+
+    const victoryEmbed = new EmbedBuilder()
+      .setTitle('🏆 BATAILLE TERMINÉE ! 🏆')
+      .setColor(0xffd700)
+      .setDescription(`\n${victoryMessage}\n\n*"In the digital arena, legends are born..."*`)
+      .setImage('https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif')
+      .setTimestamp();
+
+    await channel.send({ embeds: [victoryEmbed] });
+
+    // 2️⃣ CLASSEMENT DÉTAILLÉ - TOP 5
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    let rankingText = '';
+    for (const result of rewardResults) {
+      const statusEmoji = result.eliminated ? '💀' : '✨';
+      const eliminationInfo = result.eliminated && result.eliminationOrder ? 
+        ` (éliminé #${participants.length - result.eliminationOrder + 1})` : '';
+      
+      rankingText += `**${result.position}.** ${result.title}\n`;
+      rankingText += `${statusEmoji} **${result.username}**${eliminationInfo}\n`;
+      rankingText += `💰 **+${result.reward} tokens**\n\n`;
+    }
+
+    const rankingEmbed = new EmbedBuilder()
+      .setTitle('🏅 CLASSEMENT FINAL - TOP 5')
+      .setColor(0x00ff00)
+      .setDescription(rankingText || "Aucun gagnant (erreur)")
+      .addFields([
+        {
+          name: '📊 Statistiques de bataille',
+          value: `• **Participants total:** ${participants.length}\n• **Événements générés:** ${eventCount}\n• **Ressuscitations:** ${participants.filter(p => p.revived).length}\n• **Durée moyenne par élimination:** ${Math.round(eventCount / Math.max(1, participants.length - alive.length))} événements`,
+          inline: false
+        }
+      ])
+      .setFooter({ text: `Battle ID: ${battleId.slice(0, 8)}... | Récompenses distribuées automatiquement` })
+      .setTimestamp();
+
+    await channel.send({ embeds: [rankingEmbed] });
+
+    // 3️⃣ CLASSEMENT COMPLET (si plus de 5 participants)
+    if (participants.length > 5) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+      let fullRankingText = '';
+      for (let i = 5; i < Math.min(15, finalRanking.length); i++) {
+        const participant = finalRanking[i];
+        const position = i + 1;
+        const statusEmoji = participant.eliminated ? '💀' : '⚡';
+        const eliminationInfo = participant.eliminated && participant.eliminationOrder ? 
+          ` (éliminé #${participants.length - participant.eliminationOrder + 1})` : '';
+        
+        fullRankingText += `**${position}.** ${statusEmoji} ${participant.username}${eliminationInfo}\n`;
+      }
+
+      if (finalRanking.length > 15) {
+        fullRankingText += `\n*... et ${finalRanking.length - 15} autres participants*`;
+      }
+
+      const fullRankingEmbed = new EmbedBuilder()
+        .setTitle('📋 Classement Complet (6e-15e)')
+        .setColor(0x3498db)
+        .setDescription(fullRankingText || "Aucun autre participant")
+        .setFooter({ text: "💡 Seuls les 5 premiers reçoivent des récompenses en tokens" })
+        .setTimestamp();
+
+      await channel.send({ embeds: [fullRankingEmbed] });
+    }
+
+    // 4️⃣ BOUTON POUR VOIR LES DÉTAILS (optionnel)
+    const detailButton = new ButtonBuilder()
+      .setCustomId(`battle_details_${battleId}`)
+      .setLabel('📊 Détails de bataille')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('🔍');
+
+    const row = new ActionRowBuilder<ButtonBuilder>()
+      .addComponents(detailButton);
+
+    const summaryEmbed = new EmbedBuilder()
+      .setTitle('✅ Bataille Complètement Terminée')
+      .setColor(0x2ecc71)
+      .setDescription(`\n🎯 **Résumé:**\n• **Gagnant:** ${winner.username}\n• **Participants:** ${participants.length}\n• **Top 5 récompensés:** ${Math.min(5, participants.length)}\n• **Total tokens distribués:** ${rewardResults.reduce((sum, r) => sum + r.reward, 0)}\n\nMerci à tous les participants ! 🎮`)
+      .setTimestamp();
+
+    await channel.send({ 
+      embeds: [summaryEmbed], 
+      components: [row] 
+    });
+
+    // 🏁 Terminer la bataille
+    currentBattle = null;
+    
+    logger.info(`🏁 [Battle ${battleId}] Completed with full results displayed. Winner: ${winner.username}`);
+
+  } catch (error) {
+    logger.error('Error finalizing battle with results:', error);
+    
+    // Message d'erreur de fallback
+    const errorEmbed = new EmbedBuilder()
+      .setTitle('❌ Erreur dans les résultats')
+      .setColor(0xff0000)
+      .setDescription('Une erreur est survenue lors de l\'affichage des résultats. Vérifiez les logs.')
+      .setTimestamp();
+
+    await channel.send({ embeds: [errorEmbed] });
+    currentBattle = null;
+  }
+}
+
+
 // 🆕 Fonction de simulation corrigée avec plus d'éliminations
 async function simulateEpicBattle(battleId: string, channel: TextChannel, services: Map<string, any>) {
   try {
@@ -987,7 +1178,7 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
         eliminationChance = Math.min(0.9, eliminationChance); // Max 90% de chance
 
         if (Math.random() < eliminationChance && alive.length > 1) {
-          defender.eliminated = true;
+          await trackElimination(defender, participants.filter((p: any) => p.eliminated).length + 1);
           eliminationOccurred = true;
           
           const elimMessage = MINING_BATTLE_EVENTS.elimination[
@@ -1025,41 +1216,7 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
     // 🏆 ANNONCE DU VAINQUEUR (si il y en a un)
     const winner = participants.find((p: any) => !p.eliminated);
     if (winner) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      const victoryMessage = MINING_BATTLE_EVENTS.victory[
-        Math.floor(Math.random() * MINING_BATTLE_EVENTS.victory.length)
-      ].replace('{username}', `**${winner.username}**`);
-
-      const finalStats = participants.filter((p: any) => !p.eliminated).length;
-      const revivedCount = participants.filter((p: any) => p.revived).length;
-      const eliminationRate = ((participantCount - finalStats) / participantCount * 100).toFixed(1);
-
-      const victoryEmbed = new EmbedBuilder()
-        .setTitle('🏆 VICTOIRE ÉPIQUE ! 🏆')
-        .setColor(0xffd700)
-        .setDescription(`
-${victoryMessage}
-
-**🎯 BATAILLE TERMINÉE !**
-*"In the matrix of mining, ${winner.username} found the ultimate algorithm..."*
-
-**📊 STATISTIQUES FINALES:**
-• **Total participants:** ${participantCount}
-• **Survivant final:** ${winner.username} 🏆
-• **Total événements:** ${eventCount}
-• **Ressuscitations:** ${revivedCount}
-• **Taux d'élimination:** ${eliminationRate}%
-
-Les récompenses sont en cours de distribution...
-        `)
-        .setImage('https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif')
-        .setTimestamp();
-
-      await channel.send({ embeds: [victoryEmbed] });
-
-      // Terminer la bataille dans le service
-      currentBattle = null;
+      await finalizeBattleWithResults(battleId, channel, participants, eventCount, services);
       
       logger.info(`🏁 [Battle ${battleId}] Completed: ${winner.username} wins after ${eventCount} events (${participantCount}→1 participants)`);
     } else {
@@ -1107,4 +1264,4 @@ function getRandomEventType(aliveCount: number, progressRatio: number): 'combat'
 }
 
 // Export pour les autres modules
-export { MINING_BATTLE_EVENTS };
+export { finalizeBattleWithResults, trackElimination, BATTLE_REWARDS, MINING_BATTLE_EVENTS };

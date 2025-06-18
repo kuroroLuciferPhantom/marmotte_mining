@@ -250,6 +250,60 @@ export class MiningService {
   }
 
   /**
+ * ⚙️ Applique l'usure continue pendant le minage actif
+ * Cette fonction doit être appelée périodiquement (par exemple toutes les heures)
+ */
+async applyPeriodicWear(): Promise<void> {
+  try {
+    // Récupère tous les utilisateurs qui minent actuellement
+    const activeMiners = await this.database.client.user.findMany({
+      where: { 
+        miningActive: true,
+        lastMiningCheck: {
+          // Seulement ceux qui minent depuis plus d'1 heure
+          lt: new Date(Date.now() - 60 * 60 * 1000)
+        }
+      },
+      include: { machines: true }
+    });
+
+    logger.info(`🔧 Applying periodic wear to ${activeMiners.length} active miners`);
+
+    for (const user of activeMiners) {
+      const miningTimeHours = (Date.now() - user.lastMiningCheck.getTime()) / (1000 * 60 * 60);
+      
+      // Applique l'usure pour ce temps de minage
+      const wearReport = await this.applyWearAndTear(user.id, miningTimeHours);
+      
+      // Met à jour le lastMiningCheck pour éviter de re-appliquer l'usure
+      await this.database.client.user.update({
+        where: { id: user.id },
+        data: { lastMiningCheck: new Date() }
+      });
+
+      // Log les pannes critiques
+      const criticalFailures = wearReport.filter(w => w.criticalFailure);
+      if (criticalFailures.length > 0) {
+        logger.warn(`💀 User ${user.id} has ${criticalFailures.length} machines that failed during mining`);
+        
+        // 🔧 OPTIONNEL: Arrêter automatiquement le minage si trop de machines en panne
+        const workingMachines = user.machines.filter(m => m.durability > 0).length - criticalFailures.length;
+        if (workingMachines === 0) {
+          await this.database.client.user.update({
+            where: { id: user.id },
+            data: { miningActive: false }
+          });
+          logger.info(`🛑 Auto-stopped mining for user ${user.id} - all machines broken`);
+        }
+      }
+    }
+
+  } catch (error) {
+    logger.error('Error in applyPeriodicWear:', error);
+  }
+}
+
+  /**
    * Applique l'usure des machines en fonction du temps de minage
    */
   private async applyWearAndTear(userId: string, miningTimeHours: number): Promise<WearResult[]> {
@@ -669,56 +723,67 @@ private async handleAutoEviction(userId: string): Promise<void> {
   }
 
   /**
-   * Collecte automatiquement les récompenses de minage
-   */
-  async collectMiningRewards(userId: string): Promise<number> {
-    try {
-      const user = await this.database.client.user.findUnique({
-        where: { id: userId },
-        include: { machines: true }
-      });
+ * 🔧 AMÉLIORATION de la fonction collectMiningRewards existante
+ * Maintenant applique aussi l'usure lors de la collecte
+ */
+async collectMiningRewards(userId: string): Promise<number> {
+  try {
+    const user = await this.database.client.user.findUnique({
+      where: { id: userId },
+      include: { machines: true }
+    });
 
-      if (!user || !user.miningActive) {
-        return 0;
-      }
-
-      const rewards = await this.calculateMiningRewards(userId, user.lastMiningCheck);
-
-      if (rewards > 0) {
-        await this.database.client.user.update({
-          where: { id: userId },
-          data: {
-            tokens: { increment: rewards },
-            totalMined: { increment: rewards },
-            lastMiningCheck: new Date()
-          }
-        });
-
-        await this.database.client.transaction.create({
-          data: {
-            userId,
-            type: TransactionType.MINING_REWARD,
-            amount: rewards,
-            description: `Collecte automatique: ${rewards.toFixed(4)} tokens`
-          }
-        });
-
-        // Met à jour le leaderboard
-        const updatedUser = await this.database.client.user.findUnique({
-          where: { id: userId }
-        });
-        if (updatedUser) {
-          await this.redis.addToLeaderboard(userId, updatedUser.tokens);
-        }
-      }
-
-      return rewards;
-
-    } catch (error) {
-      logger.error('Error collecting mining rewards:', error);
+    if (!user || !user.miningActive) {
       return 0;
     }
+
+    const now = new Date();
+    const miningTimeHours = (now.getTime() - user.lastMiningCheck.getTime()) / (1000 * 60 * 60);
+
+    // 🔧 NOUVEAU: Applique l'usure lors de la collecte si ça fait plus d'1h
+    if (miningTimeHours >= 1.0) {
+      await this.applyWearAndTear(userId, miningTimeHours);
+      logger.info(`🔧 Applied ${miningTimeHours.toFixed(2)}h of wear to user ${userId} machines during collection`);
+    }
+
+    // Calcule les récompenses APRÈS l'usure (plus réaliste)
+    const rewards = await this.calculateMiningRewards(userId, user.lastMiningCheck);
+
+    if (rewards > 0) {
+      await this.database.client.user.update({
+        where: { id: userId },
+        data: {
+          tokens: { increment: rewards },
+          totalMined: { increment: rewards },
+          lastMiningCheck: now
+        }
+      });
+
+      await this.database.client.transaction.create({
+        data: {
+          userId,
+          type: TransactionType.MINING_REWARD,
+          amount: rewards,
+          description: `Collecte automatique: ${rewards.toFixed(4)} tokens`
+        }
+      });
+
+      // Met à jour le leaderboard
+      const updatedUser = await this.database.client.user.findUnique({
+        where: { id: userId }
+      });
+      if (updatedUser) {
+        await this.redis.addToLeaderboard(userId, updatedUser.tokens);
+      }
+    }
+
+    return rewards;
+
+  } catch (error) {
+    logger.error('Error collecting mining rewards:', error);
+    return 0;
   }
+}
 
 
   /**

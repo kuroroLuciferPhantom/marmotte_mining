@@ -507,10 +507,10 @@ async function handleCollectRewards(interaction: ChatInputCommandInteraction, mi
     return;
   }
 
-  // Calcule les statistiques avant collecte pour estimer les gains
   const stats = await miningService.getMiningStats(user.id);
   const now = new Date();
   const miningTimeMinutes = Math.floor((now.getTime() - user.lastMiningCheck.getTime()) / 1000 / 60);
+  const miningTimeHours = miningTimeMinutes / 60;
   
   if (miningTimeMinutes < 1) {
     await interaction.reply({
@@ -520,17 +520,25 @@ async function handleCollectRewards(interaction: ChatInputCommandInteraction, mi
     return;
   }
 
+  // 🔧 NOUVEAU: Informer sur l'usure qui va être appliquée
+  let wearWarning = '';
+  if (miningTimeHours >= 1.0) {
+    const estimatedWear = miningTimeHours * 0.5; // Exemple avec Basic Rig
+    wearWarning = `\n⚠️ Usure appliquée: ~${estimatedWear.toFixed(1)}% durabilité par machine`;
+  }
+
   const estimatedGrossGains = stats ? stats.tokensPerSecond * miningTimeMinutes * 60 : 0;
   const estimatedEnergyCost = stats ? (stats.energyCostPerHour / 60) * miningTimeMinutes : 0;
   const estimatedNetGains = Math.max(0, estimatedGrossGains - estimatedEnergyCost);
 
+  // 🔧 AMÉLIORÉ: Maintenant applique l'usure automatiquement
   const rewards = await miningService.collectMiningRewards(user.id);
 
   if (rewards > 0) {
     const collectEmbed = new EmbedBuilder()
       .setColor(0xF1C40F)
       .setTitle('💰 **RÉCOMPENSES COLLECTÉES!**')
-      .setDescription(`Session de **${miningTimeMinutes} minutes** terminée`)
+      .setDescription(`Session de **${miningTimeMinutes} minutes** (${miningTimeHours.toFixed(1)}h) terminée${wearWarning}`)
       .addFields(
         { name: '💰 Gains bruts estimés', value: `${estimatedGrossGains.toFixed(4)} tokens`, inline: true },
         { name: '⚡ Coût énergie estimé', value: `${estimatedEnergyCost.toFixed(4)} tokens`, inline: true },
@@ -540,24 +548,16 @@ async function handleCollectRewards(interaction: ChatInputCommandInteraction, mi
         { name: '🔋 Info', value: 'Coûts énergétiques déjà déduits', inline: true }
       );
 
-    // Ajoute des conseils basés sur la performance
-    const efficiency = estimatedGrossGains > 0 ? (rewards / estimatedGrossGains) * 100 : 0;
-    
-    if (efficiency < 70) {
+    // 🔧 NOUVEAU: Avertissement sur l'usure si session longue
+    if (miningTimeHours >= 2.0) {
       collectEmbed.addFields({
-        name: '💡 Conseil',
-        value: `Efficacité: ${efficiency.toFixed(1)}% - Vos machines ont besoin de maintenance pour optimiser les gains!`,
-        inline: false
-      });
-    } else if (efficiency > 90) {
-      collectEmbed.addFields({
-        name: '✨ Excellent!',
-        value: `Efficacité: ${efficiency.toFixed(1)}% - Vos machines sont en excellent état!`,
+        name: '⚠️ Attention',
+        value: `Session de ${miningTimeHours.toFixed(1)}h ! Vos machines s'usent. Vérifiez leur état avec \`/inventory\``,
         inline: false
       });
     }
 
-    collectEmbed.setFooter({ text: 'Le minage continue... Surveillez l\'usure de vos machines!' })
+    collectEmbed.setFooter({ text: 'Le minage continue... Les machines s\'usent avec le temps!' })
               .setTimestamp();
 
     await interaction.reply({ embeds: [collectEmbed] });
