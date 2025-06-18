@@ -562,15 +562,12 @@ async function handleStartBattle(interaction: ChatInputCommandInteraction, servi
 Dans cette arène digitale impitoyable, seul le mineur le plus malin survivra ! 
 Préparez vos rigs, sharpen vos algos, et que le meilleur geek gagne !
 
-**💻 NOUVELLES RÈGLES :**
-• **🆓 ENTRÉE GRATUITE** - Plus de frais d'inscription !
-• **♾️ PLACES ILLIMITÉES** - Tout le monde peut participer !
 • **🎁 Récompenses fixes** - Top 5 gagnent des tokens !
 • **🎲 Événements aléatoires** - Apocalypse, résurrections, et plus !
 
 **⏰ INSCRIPTION LIMITÉE :**
 Vous avez **${registrationTime} minutes** pour rejoindre !
-Cliquez sur le bouton ci-dessous pour enter the matrix !
+Cliquez sur le bouton ci-dessous pour s'inscrire à la bagarre !
     `)
     .addFields([
       {
@@ -589,14 +586,14 @@ Cliquez sur le bouton ci-dessous pour enter the matrix !
         inline: true
       }
     ])
-    .setImage('https://media.giphy.com/media/26tn33aiTi1jkl6H6/giphy.gif')
+    .setImage('https://tenor.com/view/simpsons-geek-nerd-nerd-undercorver-nerd-encubierto-gif-13103971925442908094')
     .setFooter({ text: `Battle ID: ${result.battleId.slice(0, 8)}... | Lancée par ${interaction.user.username} | ${realParticipantCount} bots automatiquement ajoutés` })
     .setTimestamp();
 
   // Bouton de participation
   const joinButton = new ButtonBuilder()
     .setCustomId(`join_battle_${result.battleId}`)
-    .setLabel('🔥 ENTER THE MATRIX')
+    .setLabel('🔥 BAGARRE')
     .setStyle(ButtonStyle.Primary)
     .setEmoji('⚔️');
 
