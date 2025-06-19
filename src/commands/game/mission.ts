@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ComponentType, ButtonStyle } from 'discord.js';
+import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { CardService } from '../../services/sabotage/CardService';
 import { MissionType } from '@prisma/client';
 
@@ -10,11 +10,11 @@ export const data = new SlashCommandBuilder()
       .setName('type')
       .setDescription('Type de mission à effectuer')
       .addChoices(
-        { name: '🏭 Infiltration de Ferme (Facile)', value: MissionType.INFILTRATE_FARM },
-        { name: '🏢 Piratage d\'Entrepôt (Moyen)', value: MissionType.HACK_WAREHOUSE },
-        { name: '📋 Vol de Plans (Difficile)', value: MissionType.STEAL_BLUEPRINT },
-        { name: '💥 Sabotage de Concurrent (Très Difficile)', value: MissionType.SABOTAGE_COMPETITOR },
-        { name: '💾 Récupération de Données (Moyen)', value: MissionType.RESCUE_DATA }
+        { name: '🏭 Infiltration de Ferme (Très facile - 2h cooldown)', value: MissionType.INFILTRATE_FARM },
+        { name: '🏢 Piratage d\'Entrepôt (Facile - 4h cooldown)', value: MissionType.HACK_WAREHOUSE },
+        { name: '💾 Récupération de Données (Moyen - 6h cooldown)', value: MissionType.RESCUE_DATA }
+        { name: '📋 Vol de Plans (Difficile - 8h cooldown)', value: MissionType.STEAL_BLUEPRINT },
+        
       )
       .setRequired(false)
   );
@@ -32,20 +32,29 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         .setColor(0x8B4513)
         .setTitle('🕵️ Missions Clandestines Disponibles')
         .setDescription('Infiltrez, piratez et sabotez pour obtenir des cartes rares !\n\n**Sélectionnez une mission avec l\'option `type`**')
-        .setFooter({ text: '💡 Plus la mission est difficile, plus les récompenses sont importantes' });
+        .setFooter({ text: '💡 Plus la mission est difficile, plus le cooldown est long mais les récompenses meilleures' });
 
       for (const mission of missions) {
         const difficultyStars = '⭐'.repeat(mission.config.difficulty);
-        const statusEmoji = mission.available ? '✅' : '❌';
+        const statusEmoji = mission.available ? '✅' : '⏰';
         const successRate = Math.floor(mission.config.baseSuccessRate * 100);
+        
+        let statusText = '';
+        if (mission.available) {
+          statusText = '🟢 **Disponible maintenant !**';
+        } else if (mission.timeRemaining) {
+          const hours = Math.floor(mission.timeRemaining / 60);
+          const minutes = mission.timeRemaining % 60;
+          const timeText = hours > 0 ? `${hours}h ${minutes}min` : `${minutes}min`;
+          statusText = `🔴 Cooldown: ${timeText}`;
+        }
         
         embed.addFields({
           name: `${statusEmoji} ${mission.config.name} ${difficultyStars}`,
           value: `${mission.config.description}\n` +
-                 `**Coût:** ${mission.config.energyCost} énergie\n` +
+                 `**Cooldown:** ${mission.config.cooldownHours}h\n` +
                  `**Taux de succès:** ~${successRate}%\n` +
-                 `**Cooldown:** ${mission.config.cooldown}h\n` +
-                 `${!mission.available ? `⏱️ ${mission.reason}` : ''}`,
+                 `${statusText}`,
           inline: true
         });
       }
@@ -66,9 +75,9 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       .setTitle(result.success ? '✅ Mission Réussie !' : '❌ Mission Échouée')
       .setDescription(`**${result.config.name}**\n\n${result.narrative}`)
       .addFields(
-        { name: '💰 Coût', value: `${result.config.energyCost} énergie`, inline: true },
+        { name: '⏰ Cooldown', value: `${result.config.cooldownHours}h`, inline: true },
         { name: '📊 Résultat', value: result.success ? 'Succès' : 'Échec', inline: true },
-        { name: '⭐ Difficulté', value: '⭐'.repeat(result.config.difficulty), inline: true }
+        { name: '⚠️ Difficulté', value: '⭐'.repeat(result.config.difficulty), inline: true }
       );
 
     if (result.success && result.rewards.length > 0) {
@@ -84,9 +93,6 @@ export async function execute(interaction: ChatInputCommandInteraction, services
           case 'tokens':
             rewardTexts.push(`💰 ${reward.amount} $7N1`);
             break;
-          case 'energy':
-            rewardTexts.push(`⚡ ${reward.amount > 0 ? '+' : ''}${reward.amount} énergie`);
-            break;
         }
       }
       
@@ -95,23 +101,45 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         value: rewardTexts.join('\n') || 'Aucune récompense cette fois',
         inline: false
       });
+    } else if (!result.success && result.rewards.length > 0) {
+      // Récompenses de consolation pour échec
+      const rewardTexts = [];
+      for (const reward of result.rewards) {
+        if (reward.type === 'tokens') {
+          rewardTexts.push(`💰 ${reward.amount} $7N1 (consolation)`);
+        }
+      }
+      
+      if (rewardTexts.length > 0) {
+        embed.addFields({
+          name: '🎁 Récompenses de consolation',
+          value: rewardTexts.join('\n'),
+          inline: false
+        });
+      }
     }
 
-    embed.setFooter({
-      text: `Prochaine mission dans ${result.config.cooldown}h`
-    })
-    .setTimestamp();
+    // Calculer la prochaine mission disponible
+    const nextMission = new Date(Date.now() + result.config.cooldownHours * 60 * 60 * 1000);
+    
+    embed.addFields({
+      name: '⏰ Prochaine mission',
+      value: `<t:${Math.floor(nextMission.getTime() / 1000)}:R>`,
+      inline: false
+    });
+
+    embed.setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in mission command:', error);
     
     const errorEmbed = new EmbedBuilder()
       .setColor(0xFF0000)
       .setTitle('❌ Erreur de Mission')
       .setDescription(error.message || 'Une erreur inattendue s\'est produite.')
-      .setFooter({ text: 'Vérifiez votre énergie et les cooldowns' });
+      .setFooter({ text: 'Vérifiez vos cooldowns avec /cooldowns' });
 
     if (interaction.deferred) {
       await interaction.editReply({ embeds: [errorEmbed] });

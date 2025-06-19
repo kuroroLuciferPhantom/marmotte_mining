@@ -6,13 +6,18 @@ export interface MissionConfig {
   description: string;
   difficulty: number; // 1-5
   baseSuccessRate: number;
-  energyCost: number;
-  cooldown: number; // en heures
+  cooldownHours: number;
+  xpReward: {
+    success: number;
+    failure: number;
+  };
   rewards: {
     success: any[];
     failure?: any[];
   };
 }
+
+
 
 export interface CraftResult {
   success: boolean;
@@ -23,15 +28,18 @@ export interface CraftResult {
 export class CardService {
   private database: PrismaClient;
 
-  // Configuration des missions
+  // 🆕 CONFIGURATION MISSIONS AVEC XP
   private readonly missionConfigs: Record<MissionType, MissionConfig> = {
     [MissionType.INFILTRATE_FARM]: {
       name: "Infiltration de Ferme",
       description: "Infiltrez une ferme de minage abandonnée pour récupérer du matériel",
-      difficulty: 2,
+      difficulty: 1,
       baseSuccessRate: 0.70,
-      energyCost: 40,
-      cooldown: 6,
+      cooldownHours: 2,
+      xpReward: {
+        success: 25,   // 🆕 25 XP en cas de succès
+        failure: 10    // 🆕 10 XP même en cas d'échec
+      },
       rewards: {
         success: [
           { type: 'card', cardType: AttackType.VIRUS_Z3_MINER, rarity: CardRarity.COMMON, chance: 0.3 },
@@ -39,17 +47,20 @@ export class CardService {
           { type: 'tokens', amount: 15, chance: 0.8 }
         ],
         failure: [
-          { type: 'energy', amount: -20, chance: 1.0 }
+          { type: 'tokens', amount: 5, chance: 0.3 }
         ]
       }
     },
     [MissionType.HACK_WAREHOUSE]: {
       name: "Piratage d'Entrepôt",
       description: "Piratez les systèmes d'un entrepôt de matériel technologique",
-      difficulty: 3,
+      difficulty: 2,
       baseSuccessRate: 0.60,
-      energyCost: 60,
-      cooldown: 8,
+      cooldownHours: 4,
+      xpReward: {
+        success: 40,   // 🆕 40 XP en cas de succès
+        failure: 15    // 🆕 15 XP même en cas d'échec
+      },
       rewards: {
         success: [
           { type: 'card', cardType: DefenseType.VPN_FIREWALL, rarity: CardRarity.UNCOMMON, chance: 0.4 },
@@ -58,43 +69,16 @@ export class CardService {
         ]
       }
     },
-    [MissionType.STEAL_BLUEPRINT]: {
-      name: "Vol de Plans",
-      description: "Dérobez les plans secrets d'une nouvelle technologie de minage",
-      difficulty: 4,
-      baseSuccessRate: 0.50,
-      energyCost: 80,
-      cooldown: 12,
-      rewards: {
-        success: [
-          { type: 'card', cardType: AttackType.DNS_HIJACKING, rarity: CardRarity.RARE, chance: 0.5 },
-          { type: 'fragments', fragmentType: FragmentType.RARE_FRAGMENT, quantity: 1, chance: 0.7 },
-          { type: 'tokens', amount: 50, chance: 1.0 }
-        ]
-      }
-    },
-    [MissionType.SABOTAGE_COMPETITOR]: {
-      name: "Sabotage de Concurrent",
-      description: "Sabotez discrètement les opérations d'un concurrent majeur",
-      difficulty: 5,
-      baseSuccessRate: 0.35,
-      energyCost: 100,
-      cooldown: 24,
-      rewards: {
-        success: [
-          { type: 'card', cardType: AttackType.BRUTAL_THEFT, rarity: CardRarity.EPIC, chance: 0.6 },
-          { type: 'card', cardType: DefenseType.SABOTAGE_DETECTOR, rarity: CardRarity.RARE, chance: 0.4 },
-          { type: 'tokens', amount: 100, chance: 1.0 }
-        ]
-      }
-    },
     [MissionType.RESCUE_DATA]: {
       name: "Récupération de Données",
       description: "Récupérez des données critiques depuis un serveur compromis",
       difficulty: 3,
       baseSuccessRate: 0.65,
-      energyCost: 50,
-      cooldown: 6,
+      cooldownHours: 6,
+      xpReward: {
+        success: 50,   // 🆕 50 XP en cas de succès
+        failure: 20    // 🆕 20 XP même en cas d'échec
+      },
       rewards: {
         success: [
           { type: 'fragments', fragmentType: FragmentType.DEFENSE_FRAGMENT, quantity: 2, chance: 0.8 },
@@ -102,8 +86,99 @@ export class CardService {
           { type: 'tokens', amount: 30, chance: 1.0 }
         ]
       }
+    },
+    [MissionType.STEAL_BLUEPRINT]: {
+      name: "Vol de Plans",
+      description: "Dérobez les plans secrets d'une nouvelle technologie de minage",
+      difficulty: 4,
+      baseSuccessRate: 0.50,
+      cooldownHours: 8,
+      xpReward: {
+        success: 75,   // 🆕 75 XP en cas de succès
+        failure: 25    // 🆕 25 XP même en cas d'échec
+      },
+      rewards: {
+        success: [
+          { type: 'card', cardType: AttackType.DNS_HIJACKING, rarity: CardRarity.RARE, chance: 0.5 },
+          { type: 'fragments', fragmentType: FragmentType.RARE_FRAGMENT, quantity: 1, chance: 0.7 },
+          { type: 'tokens', amount: 50, chance: 1.0 }
+        ]
+      }
     }
   };
+
+  /**
+   * 🆕 SYSTÈME DE PROGRESSION DES NIVEAUX
+   */
+  private calculateLevelProgression(currentLevel: number): number {
+    // Formule : 100 * level^1.5 (progression exponentielle)
+    return Math.floor(100 * Math.pow(currentLevel, 1.5));
+  }
+
+  /**
+   * 🆕 MÉTHODE DE GESTION DE L'XP ET DES NIVEAUX
+   */
+  private async addExperience(userId: string, xpGained: number): Promise<{
+    leveledUp: boolean;
+    oldLevel: number;
+    newLevel: number;
+    xpGained: number;
+    totalXp: number;
+    xpToNext: number;
+  }> {
+    const user = await this.database.user.findUnique({
+      where: { discordId: userId },
+      select: {
+        id: true,
+        level: true,
+        experience: true,
+        experienceToNext: true
+      }
+    });
+
+    if (!user) {
+      throw new Error("Utilisateur introuvable");
+    }
+
+    const oldLevel = user.level;
+    let newExperience = user.experience + xpGained;
+    let newLevel = user.level;
+    let leveledUp = false;
+
+    // Vérifier si l'utilisateur monte de niveau
+    while (newExperience >= user.experienceToNext) {
+      newExperience -= user.experienceToNext;
+      newLevel++;
+      leveledUp = true;
+    }
+
+    // Calculer l'XP nécessaire pour le prochain niveau
+    const xpToNext = this.calculateLevelProgression(newLevel);
+
+    // Mettre à jour en base
+    await this.database.user.update({
+      where: { discordId: userId },
+      data: {
+        level: newLevel,
+        experience: newExperience,
+        experienceToNext: xpToNext
+      }
+    });
+
+    // Log si montée de niveau
+    if (leveledUp) {
+      logger.info(`User leveled up: ${userId} from ${oldLevel} to ${newLevel}`);
+    }
+
+    return {
+      leveledUp,
+      oldLevel,
+      newLevel,
+      xpGained,
+      totalXp: newExperience,
+      xpToNext: xpToNext - newExperience
+    };
+  }
 
   // Configuration du craft
   private readonly craftRecipes = {
@@ -132,9 +207,9 @@ export class CardService {
   constructor(database: PrismaClient) {
     this.database = database;
   }
-
+  
   /**
-   * Tente une mission clandestine
+   * 🆕 MÉTHODE MISE À JOUR : Tenter une mission (avec XP)
    */
   async attemptMission(userId: string, missionType: MissionType): Promise<any> {
     try {
@@ -153,17 +228,20 @@ export class CardService {
         throw new Error("Utilisateur introuvable");
       }
 
-      // Calculer le succès
+      // Calculer le succès (bonus niveau maintenant plus important)
       let successRate = config.baseSuccessRate;
-      // Bonus basé sur le niveau de l'utilisateur
-      successRate += (user.level - 1) * 0.02; // +2% par niveau
+      successRate += (user.level - 1) * 0.03; // +3% par niveau (au lieu de 2%)
+      successRate = Math.min(0.95, successRate); // Maximum 95% de succès
       const success = Math.random() < successRate;
 
-      // Consommer l'énergie
+      // 🆕 DONNER L'XP EN PREMIER (avant les récompenses)
+      const xpReward = success ? config.xpReward.success : config.xpReward.failure;
+      const xpResult = await this.addExperience(userId, xpReward);
+
+      // Mettre à jour lastMission
       await this.database.user.update({
         where: { discordId: userId },
         data: { 
-          energy: { decrement: config.energyCost },
           lastMission: new Date()
         }
       });
@@ -181,9 +259,12 @@ export class CardService {
 
       // Enregistrer la tentative
       const narrative = this.generateMissionNarrative(missionType, success);
+
+
+      // Utiliser l'ID interne pour la relation
       await this.database.missionAttempt.create({
         data: {
-          userId: userId,
+          userId: user.id,  // ✅ Utiliser l'ID interne
           missionType: missionType,
           success: success,
           reward: obtainedRewards,
@@ -195,6 +276,9 @@ export class CardService {
         user: userId,
         mission: missionType,
         success: success,
+        xpGained: xpReward,
+        leveledUp: xpResult.leveledUp,
+        newLevel: xpResult.newLevel,
         rewards: obtainedRewards.length
       });
 
@@ -202,7 +286,9 @@ export class CardService {
         success,
         config,
         rewards: obtainedRewards,
-        narrative
+        narrative,
+        xpResult, // 🆕 Inclure les résultats XP
+        nextMissionAt: new Date(Date.now() + config.cooldownHours * 60 * 60 * 1000)
       };
 
     } catch (error) {
@@ -212,9 +298,9 @@ export class CardService {
   }
 
   /**
-   * Vérifie si un utilisateur peut tenter une mission
+   * 🆕 NOUVELLE MÉTHODE : Vérifier si un utilisateur peut tenter une mission
    */
-  private async canAttemptMission(userId: string, missionType: MissionType): Promise<{allowed: boolean, reason?: string}> {
+  private async canAttemptMission(userId: string, missionType: MissionType): Promise<{allowed: boolean, reason?: string, timeRemaining?: number}> {
     const user = await this.database.user.findUnique({
       where: { discordId: userId }
     });
@@ -225,25 +311,74 @@ export class CardService {
 
     const config = this.missionConfigs[missionType];
 
-    // Vérifier le cooldown
+    // Vérifier le cooldown basé sur lastMission
     if (user.lastMission) {
-      const cooldownEnd = new Date(user.lastMission.getTime() + config.cooldown * 60 * 60 * 1000);
-      if (new Date() < cooldownEnd) {
-        const remaining = Math.ceil((cooldownEnd.getTime() - Date.now()) / (60 * 1000));
-        return { allowed: false, reason: `Cooldown actif ! Prochaine mission dans ${remaining} minutes.` };
+      const cooldownEnd = new Date(user.lastMission.getTime() + config.cooldownHours * 60 * 60 * 1000);
+      const now = new Date();
+      
+      if (now < cooldownEnd) {
+        const timeRemaining = Math.ceil((cooldownEnd.getTime() - now.getTime()) / (60 * 1000)); // en minutes
+        const hours = Math.floor(timeRemaining / 60);
+        const minutes = timeRemaining % 60;
+        
+        let timeText = '';
+        if (hours > 0) {
+          timeText = `${hours}h${minutes > 0 ? ` ${minutes}min` : ''}`;
+        } else {
+          timeText = `${minutes}min`;
+        }
+        
+        return { 
+          allowed: false, 
+          reason: `Cooldown actif ! Prochaine mission dans ${timeText}.`,
+          timeRemaining
+        };
       }
-    }
-
-    // Vérifier l'énergie
-    if (user.energy < config.energyCost) {
-      return { allowed: false, reason: `Énergie insuffisante ! Il vous faut ${config.energyCost} d'énergie.` };
     }
 
     return { allowed: true };
   }
 
   /**
-   * Applique une récompense à un utilisateur
+   * 🆕 MÉTHODE : Obtenir les statistiques d'XP d'un utilisateur
+   */
+  async getUserXpStats(userId: string): Promise<any> {
+    const user = await this.database.user.findUnique({
+      where: { discordId: userId },
+      select: {
+        username: true,
+        level: true,
+        experience: true,
+        experienceToNext: true
+      }
+    });
+
+    if (!user) {
+      throw new Error("Utilisateur introuvable");
+    }
+
+    const xpToNextLevel = user.experienceToNext - user.experience;
+    const progressPercent = Math.floor((user.experience / user.experienceToNext) * 100);
+
+    // Calculer l'XP total gagnée
+    let totalXpGained = user.experience;
+    for (let i = 1; i < user.level; i++) {
+      totalXpGained += this.calculateLevelProgression(i);
+    }
+
+    return {
+      username: user.username,
+      level: user.level,
+      currentXp: user.experience,
+      xpToNext: xpToNextLevel,
+      xpForNextLevel: user.experienceToNext,
+      progressPercent,
+      totalXpGained
+    };
+  }
+
+  /**
+   * 🆕 MÉTHODE MISE À JOUR : Applique une récompense (sans gestion d'énergie)
    */
   private async applyReward(userId: string, reward: any): Promise<void> {
     switch (reward.type) {
@@ -266,13 +401,49 @@ export class CardService {
         });
         break;
 
-      case 'energy':
-        await this.database.user.update({
-          where: { discordId: userId },
-          data: { energy: { increment: reward.amount } }
-        });
-        break;
+      // 🗑️ SUPPRIMÉ : cas 'energy' (plus utilisé)
     }
+  }
+
+  // 🆕 NOUVELLE MÉTHODE : Obtenir le statut des cooldowns d'un utilisateur
+  async getUserCooldownStatus(userId: string): Promise<any> {
+    const user = await this.database.user.findUnique({
+      where: { discordId: userId },
+      select: {
+        discordId: true,
+        username: true,
+        lastMission: true,
+        level: true
+      }
+    });
+
+    if (!user) {
+      throw new Error("Utilisateur introuvable");
+    }
+
+    const cooldowns = [];
+    
+    for (const [missionType, config] of Object.entries(this.missionConfigs)) {
+      const canAttempt = await this.canAttemptMission(userId, missionType as MissionType);
+      
+      cooldowns.push({
+        missionType,
+        name: config.name,
+        difficulty: config.difficulty,
+        cooldownHours: config.cooldownHours,
+        available: canAttempt.allowed,
+        timeRemaining: canAttempt.timeRemaining || 0
+      });
+    }
+
+    return {
+      user: {
+        username: user.username,
+        level: user.level,
+        lastMission: user.lastMission
+      },
+      cooldowns
+    };
   }
 
   /**
@@ -535,7 +706,7 @@ export class CardService {
   }
 
   /**
-   * Obtient les missions disponibles pour un utilisateur
+   * 🆕 MÉTHODE MISE À JOUR : Obtenir les missions disponibles
    */
   async getAvailableMissions(userId: string): Promise<any> {
     const user = await this.database.user.findUnique({
@@ -551,11 +722,19 @@ export class CardService {
     for (const [missionType, config] of Object.entries(this.missionConfigs)) {
       const canAttempt = await this.canAttemptMission(userId, missionType as MissionType);
       
+      // Calculer le temps jusqu'à la prochaine mission possible
+      let nextAvailableAt = null;
+      if (!canAttempt.allowed && canAttempt.timeRemaining) {
+        nextAvailableAt = new Date(Date.now() + canAttempt.timeRemaining * 60 * 1000);
+      }
+      
       missions.push({
         type: missionType,
         config,
         available: canAttempt.allowed,
-        reason: canAttempt.reason
+        reason: canAttempt.reason,
+        timeRemaining: canAttempt.timeRemaining,
+        nextAvailableAt
       });
     }
 
@@ -569,7 +748,7 @@ export class CardService {
     const narratives = {
       [MissionType.INFILTRATE_FARM]: {
         success: "🌙 Sous le couvert de la nuit, vous vous faufilez dans la ferme abandonnée. Les anciens rigs de minage gisent là, oubliés. Vous récupérez discrètement du matériel utile avant de disparaître dans l'ombre.",
-        failure: "🚨 Des capteurs de mouvement que vous n'aviez pas repérés déclenchent l'alarme ! Vous devez battre en retraite précipitamment, perdant de l'énergie dans votre fuite."
+        failure: "🚨 Des capteurs de mouvement que vous n'aviez pas repérés déclenchent l'alarme ! Vous devez battre en retraite précipitamment"
       },
       [MissionType.HACK_WAREHOUSE]: {
         success: "💻 Vos doigts dansent sur le clavier alors que vous percez les défenses du système. Les données défilent sur votre écran - jackpot ! Vous téléchargez tout ce qui vous intéresse avant d'effacer vos traces.",
@@ -611,24 +790,5 @@ export class CardService {
     });
 
     logger.info('Cleaned up empty inventory items');
-  }
-
-  /**
-   * Régénère l'énergie des utilisateurs (à appeler périodiquement)
-   */
-  async regenerateEnergy(): Promise<void> {
-    // Regenerer 1 énergie par heure, max 100
-    await this.database.user.updateMany({
-      where: { energy: { lt: 100 } },
-      data: { energy: { increment: 1 } }
-    });
-
-    // S'assurer qu'on ne dépasse pas 100
-    await this.database.user.updateMany({
-      where: { energy: { gt: 100 } },
-      data: { energy: 100 }
-    });
-
-    logger.info('Regenerated energy for users');
   }
 }

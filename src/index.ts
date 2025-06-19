@@ -214,16 +214,7 @@ class MarmotteMiningBot {
       }
     }, 60 * 60 * 1000);
 
-    // Régénération d'énergie (toutes les heures)
-    this.energyRegenInterval = setInterval(async () => {
-      try {
-        const cardService = this.getService<CardService>('cards');
-        await cardService.regenerateEnergy();
-        logger.info('⚡ Energy regenerated for all users');
-      } catch (error) {
-        logger.error('Error in energy regeneration:', error);
-      }
-    }, 60 * 60 * 1000);
+    // 🗑️ SUPPRIMÉ : energyRegenInterval - Plus besoin de régénération d'énergie
 
     // 🆕 Surveillance des prix tokens (toutes les 2 minutes)
     this.tokenPriceInterval = setInterval(async () => {
@@ -241,9 +232,10 @@ class MarmotteMiningBot {
     // Nettoyage quotidien
     this.scheduleDailyCleanup();
 
-    logger.info('⏰ Periodic tasks scheduled');
+    logger.info('⏰ Periodic tasks scheduled (energy system removed)');
     logger.info('💰 Weekly salary reminders activated');
     logger.info('📊 Token market monitoring activated');
+    logger.info('🕵️ Mission cooldown system active');
   }
 
   private scheduleWeeklySalaryReminder(): void {
@@ -313,8 +305,9 @@ class MarmotteMiningBot {
       // Clear intervals
       if (this.cleanupInterval) clearInterval(this.cleanupInterval);
       if (this.marketRefreshInterval) clearInterval(this.marketRefreshInterval);
-      if (this.energyRegenInterval) clearInterval(this.energyRegenInterval);
+      // 🗑️ SUPPRIMÉ : energyRegenInterval
       if (this.tokenPriceInterval) clearInterval(this.tokenPriceInterval);
+      
       const maintenanceService = this.services.get('maintenance') as MachineMaintenanceService;
       maintenanceService.stopMaintenanceLoop();
 

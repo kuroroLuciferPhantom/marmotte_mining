@@ -1,5 +1,6 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder, ButtonBuilder, ActionRowBuilder, ComponentType, ButtonStyle } from 'discord.js';
 import { CardService } from '../../services/sabotage/CardService';
+import { any } from 'joi';
 
 export const data = new SlashCommandBuilder()
   .setName('defense')
@@ -37,7 +38,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
           {
             name: '🛡️ Défenses Actives',
             value: inventory.activeDefenses.length > 0 ? 
-              inventory.activeDefenses.map(d => `✅ ${d.type}`).join('\n') :
+              inventory.activeDefenses.map((d: any) => `✅ ${d.type}`).join('\n') :
               'Aucune défense active',
             inline: true
           },
@@ -69,7 +70,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         
         for (let i = 0; i < inventory.defenseCards.length && i < 5; i++) {
           const card = inventory.defenseCards[i];
-          const rarityEmojis = {
+          const rarityEmojis: Record<'COMMON' | 'UNCOMMON' | 'RARE' | 'EPIC' | 'LEGENDARY', string> = {
             'COMMON': '⚪',
             'UNCOMMON': '🟢',
             'RARE': '🔵',
@@ -78,7 +79,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
           };
 
           embed.addFields({
-            name: `${rarityEmojis[card.rarity]} ${card.type}`,
+            name: `${rarityEmojis[card.rarity as keyof typeof rarityEmojis]} ${card.type}`,
             value: `**Quantité:** ${card.quantity}\n` +
                    `**Statut:** ${card.isActive ? '✅ Active' : '❌ Inactive'}\n` +
                    `**Rareté:** ${card.rarity}`,
@@ -140,7 +141,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
               components: [] 
             });
 
-          } catch (error) {
+          } catch (error: any) {
             const errorEmbed = new EmbedBuilder()
               .setColor(0xFF0000)
               .setTitle('❌ Erreur de Défense')
@@ -185,7 +186,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         .setFooter({ text: 'Le recyclage détruit la carte définitivement' });
 
       const buttons = [];
-      const rarityEmojis = {
+      const rarityEmojis: Record<string, string> = {
         'COMMON': '⚪',
         'UNCOMMON': '🟢',
         'RARE': '🔵',
@@ -263,7 +264,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
             components: [] 
           });
 
-        } catch (error) {
+        } catch (error: any) {
           const errorEmbed = new EmbedBuilder()
             .setColor(0xFF0000)
             .setTitle('❌ Erreur de Recyclage')

@@ -2,6 +2,8 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from '
 import { ActivityService } from '../../services/activity/ActivityService';
 import { HousingService } from '../../services/housing/HousingService';
 import { DatabaseService } from '../../services/database/DatabaseService';
+import { CardService } from '../../services/sabotage/CardService';
+
 
 export const data = new SlashCommandBuilder()
   .setName('profile')
@@ -11,7 +13,8 @@ export async function execute(interaction: ChatInputCommandInteraction, services
   try {
     const activityService = services.get('activity') as ActivityService;
     const databaseService = services.get('database') as DatabaseService;
-    
+    const cardService = services.get('cards') as CardService;
+
     // Create HousingService instance locally until it's added to dependency injection
     const housingService = new HousingService(databaseService.client);
     
@@ -42,7 +45,7 @@ export async function execute(interaction: ChatInputCommandInteraction, services
           },
           {
             name: '🎁 Ce que vous recevrez',
-            value: '• 🏠 Lieu de départ: "Chambre chez maman"\n• 🔧 Machine gratuite: Basic Rig\n• ⚡ 100 points d\'énergie\n• 📚 Guide complet du jeu',
+            value: '• 🏠 Lieu de départ: "Chambre chez maman"\n• 🔧 Machine gratuite: Basic Rig\n • 📚 Guide complet du jeu',
             inline: false
           }
         )
@@ -72,15 +75,129 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       }
     });
 
+    // 🆕 OBTENIR LES STATS XP ET MISSIONS
+    let levelDisplay = `Niveau ${user.level}`;
+    let xpDisplay = 'XP non disponible';
+    let missionStatus = 'Statut inconnu';
+    let nextMissionTime = 'N/A';
+    
+    try {
+      // Stats XP
+      const xpStats = await cardService.getUserXpStats(user.discordId);
+      const progressPercent = Math.floor((xpStats.currentXp / xpStats.xpForNextLevel) * 100);
+      const progressBar = '█'.repeat(Math.floor(progressPercent / 10)) + '░'.repeat(10 - Math.floor(progressPercent / 10));
+      
+      // Affichage niveau avec émojis selon le niveau
+      let levelEmoji = '';
+      if (xpStats.level >= 50) levelEmoji = '👑';
+      else if (xpStats.level >= 20) levelEmoji = '⭐';
+      else if (xpStats.level >= 10) levelEmoji = '🔥';
+      
+      levelDisplay = `Niveau ${xpStats.level} ${levelEmoji}`;
+      xpDisplay = `${xpStats.currentXp}/${xpStats.xpForNextLevel} XP\n${progressBar} (${progressPercent}%)`;
+      
+      // Statut missions
+      const cooldownStatus = await cardService.getUserCooldownStatus(user.discordId);
+      const availableMissions = cooldownStatus.cooldowns.filter((c: any) => c.available).length;
+      const totalMissions = cooldownStatus.cooldowns.length;
+      
+      if (availableMissions === totalMissions) {
+        missionStatus = '✅ Toutes missions disponibles';
+        nextMissionTime = 'Maintenant !';
+      } else if (availableMissions > 0) {
+        missionStatus = `🕐 ${availableMissions}/${totalMissions} missions prêtes`;
+        const nextCooldown = cooldownStatus.cooldowns
+          .filter((c: any) => !c.available)
+          .sort((a: any, b: any) => a.timeRemaining - b.timeRemaining)[0];
+        
+        if (nextCooldown) {
+          const hours = Math.floor(nextCooldown.timeRemaining / 60);
+          const minutes = nextCooldown.timeRemaining % 60;
+          nextMissionTime = hours > 0 ? `${hours}h ${minutes}min` : `${minutes}min`;
+        }
+      } else {
+        missionStatus = '⏰ Toutes missions en cooldown';
+        const shortestCooldown = cooldownStatus.cooldowns
+          .sort((a: any, b: any) => a.timeRemaining - b.timeRemaining)[0];
+        
+        if (shortestCooldown) {
+          const hours = Math.floor(shortestCooldown.timeRemaining / 60);
+          const minutes = shortestCooldown.timeRemaining % 60;
+          nextMissionTime = hours > 0 ? `${hours}h ${minutes}min` : `${minutes}min`;
+        }
+      }
+    } catch (error) {
+      console.error('Error getting XP/mission stats:', error);
+      levelDisplay = `Niveau ${user.level}`;
+      xpDisplay = 'Erreur lors du chargement XP';
+      missionStatus = 'Utilisez /mission';
+      nextMissionTime = 'N/A';
+    }
+
+    // Get recent mission count
+    const recentMissions = await databaseService.client.missionAttempt.count({
+      where: {
+        userId: user.id,
+        timestamp: {
+          gte: new Date(Date.now() - 24 * 60 * 60 * 1000) // 24h
+        }
+      }
+    });
+
+    // Déterminer la couleur de l'embed selon le niveau
+    let embedColor = 0x00AE86; // Vert par défaut
+    if (user.level >= 50) embedColor = 0xFFD700; // Or pour niveau 50+
+    else if (user.level >= 20) embedColor = 0xFF6B35; // Orange pour niveau 20+
+    else if (user.level >= 10) embedColor = 0x4ECDC4; // Turquoise pour niveau 10+
+    else if (user.tokens > 1000) embedColor = 0xFFD700; // Or pour les riches
+
     // Create profile embed with location
     const embed = new EmbedBuilder()
       .setColor(user.tokens > 1000 ? 0xFFD700 : 0x00AE86)
       .setTitle(`🎮 Profil de ${user.username}`)
-      .setDescription(user.tokens > 1000 ? '🔥 Mineur expérimenté!' : '⛏️ Mineur en développement')
+      .setDescription(
+        user.level >= 20 
+          ? '🔥 Maître des missions clandestines !' 
+          : user.level >= 10 
+            ? '⭐ Agent expérimenté' 
+            : '⛏️ Mineur en développement'
+      )
       .addFields(
         { name: '📍 Lieu', value: user.location || 'Chambre chez maman', inline: true },
         { name: '🏠 Logement', value: `${housingInfo.emoji} ${housingInfo.name}`, inline: true },
         { name: '🔧 Capacité', value: `${user.machines.length}/${housingInfo.maxMachines} machines`, inline: true },
+        { 
+          name: '🎯 Niveau', 
+          value: levelDisplay, 
+          inline: true 
+        },
+        { 
+          name: '📊 Expérience', 
+          value: xpDisplay, 
+          inline: true 
+        },
+        { 
+          name: '🚀 Bonus Missions', 
+          value: `+${(user.level - 1) * 3}% succès`, 
+          inline: true 
+        },
+        
+        // 🆕 SECTION MISSIONS (statut détaillé)
+        { 
+          name: '🕵️ Statut Missions', 
+          value: `${missionStatus}\n📊 **24h**: ${recentMissions} missions`, 
+          inline: true 
+        },
+        { 
+          name: '⏰ Prochaine disponible', 
+          value: nextMissionTime, 
+          inline: true 
+        },
+        { 
+          name: '📅 Dernière mission', 
+          value: user.lastMission ? `<t:${Math.floor(user.lastMission.getTime() / 1000)}:R>` : 'Jamais', 
+          inline: true 
+        },
         { name: '💰 Tokens', value: user.tokens.toFixed(2), inline: true },
         { name: '💵 Dollars', value: `${user.dollars.toFixed(2)}$`, inline: true },
         { name: '⛏️ Machines', value: user.machines.length.toString(), inline: true },
@@ -93,6 +210,15 @@ export async function execute(interaction: ChatInputCommandInteraction, services
       )
       .setFooter({ text: 'Marmotte Mining • Utilisez /help pour voir toutes les commandes' })
       .setTimestamp();
+
+      // 🆕 AJOUTER DES BADGES SPÉCIAUX SELON LE NIVEAU
+    if (user.level >= 50) {
+      embed.setThumbnail('https://cdn.discordapp.com/emojis/placeholder_crown.png'); // Couronne
+    } else if (user.level >= 20) {
+      embed.setThumbnail('https://cdn.discordapp.com/emojis/placeholder_star.png'); // Étoile
+    } else {
+      embed.setThumbnail(interaction.user.displayAvatarURL());
+    }
 
     await interaction.reply({ embeds: [embed] });
 
