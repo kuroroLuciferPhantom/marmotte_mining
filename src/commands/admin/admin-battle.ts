@@ -586,7 +586,7 @@ Cliquez sur le bouton ci-dessous pour s'inscrire à la bagarre !
         inline: true
       }
     ])
-    .setImage('https://tenor.com/view/simpsons-geek-nerd-nerd-undercorver-nerd-encubierto-gif-13103971925442908094')
+    .setImage('https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExdzRyNzI1c3J2bWUxc2M0eGN3Y2xrOWpkenlqdGFteTcxbXg4b3Z6NCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/ggKjpRRNpquxc1DIDU/giphy.gif')
     .setFooter({ text: `Battle ID: ${result.battleId.slice(0, 8)}... | Lancée par ${interaction.user.username} | ${realParticipantCount} bots automatiquement ajoutés` })
     .setTimestamp();
 
@@ -1000,15 +1000,7 @@ async function finalizeBattleWithResults(battleId: string, channel: TextChannel,
       await channel.send({ embeds: [fullRankingEmbed] });
     }
 
-    // 4️⃣ BOUTON POUR VOIR LES DÉTAILS (optionnel)
-    const detailButton = new ButtonBuilder()
-      .setCustomId(`battle_details_${battleId}`)
-      .setLabel('📊 Détails de bataille')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('🔍');
 
-    const row = new ActionRowBuilder<ButtonBuilder>()
-      .addComponents(detailButton);
 
     const summaryEmbed = new EmbedBuilder()
       .setTitle('✅ Bataille Complètement Terminée')
@@ -1018,7 +1010,7 @@ async function finalizeBattleWithResults(battleId: string, channel: TextChannel,
 
     await channel.send({ 
       embeds: [summaryEmbed], 
-      components: [row] 
+      components: [] 
     });
 
     // 🏁 Terminer la bataille
@@ -1070,7 +1062,7 @@ async function simulateEpicBattle(battleId: string, channel: TextChannel, servic
     logger.info(`🎮 [Battle ${battleId}] Starting with ${participantCount} participants - Battle will continue until 1 survivor remains`);
 
     while (participants.filter((p: any) => !p.eliminated).length > 1) {
-      await new Promise(resolve => setTimeout(resolve, 1500 + Math.random() * 2000)); // 1.5-3.5 secondes (plus rapide)
+      await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 2000));
 
       const alive = participants.filter((p: any) => !p.eliminated);
       if (alive.length <= 1) break;

@@ -11,6 +11,11 @@ export class LeaderboardInteractionHandler {
 
   async handleLeaderboardInteraction(interaction: StringSelectMenuInteraction | ButtonInteraction): Promise<void> {
     try {
+
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferUpdate();
+      }
+
       if (interaction.isStringSelectMenu() && interaction.customId === 'leaderboard_navigation') {
         const selectedType = interaction.values[0];
         await this.switchLeaderboardType(interaction, selectedType);
@@ -35,8 +40,7 @@ export class LeaderboardInteractionHandler {
   }
 
   private async switchLeaderboardType(interaction: StringSelectMenuInteraction, type: string) {
-    await interaction.deferUpdate();
-    
+   
     const limit = 15; // Valeur par défaut
     
     switch (type) {
@@ -58,9 +62,7 @@ export class LeaderboardInteractionHandler {
     }
   }
 
-  private async refreshCurrentLeaderboard(interaction: ButtonInteraction) {
-    await interaction.deferUpdate();
-    
+  private async refreshCurrentLeaderboard(interaction: ButtonInteraction) {    
     // Détecter le type actuel depuis le titre de l'embed
     const currentEmbed = interaction.message.embeds[0];
     const title = currentEmbed?.title || '';
