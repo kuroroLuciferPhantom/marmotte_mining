@@ -12,9 +12,8 @@ export const data = new SlashCommandBuilder()
       .addChoices(
         { name: '🏭 Infiltration de Ferme (Très facile - 2h cooldown)', value: MissionType.INFILTRATE_FARM },
         { name: '🏢 Piratage d\'Entrepôt (Facile - 4h cooldown)', value: MissionType.HACK_WAREHOUSE },
-        { name: '💾 Récupération de Données (Moyen - 6h cooldown)', value: MissionType.RESCUE_DATA }
+        { name: '💾 Récupération de Données (Moyen - 6h cooldown)', value: MissionType.RESCUE_DATA },
         { name: '📋 Vol de Plans (Difficile - 8h cooldown)', value: MissionType.STEAL_BLUEPRINT },
-        
       )
       .setRequired(false)
   );

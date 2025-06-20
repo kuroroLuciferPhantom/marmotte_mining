@@ -1,4 +1,4 @@
-import { PrismaClient, AttackType, DefenseType, CardRarity, FragmentType, MissionType } from '@prisma/client';
+import { PrismaClient, AttackType, DefenseType, CardRarity, FragmentType, MissionType, User } from '@prisma/client';
 import { logger } from '../../utils/logger';
 
 export interface MissionConfig {
@@ -252,7 +252,7 @@ export class CardService {
 
       for (const reward of rewards) {
         if (Math.random() < reward.chance) {
-          await this.applyReward(user.discordId, reward);
+          await this.applyReward(user, reward);
           obtainedRewards.push(reward);
         }
       }
@@ -378,30 +378,28 @@ export class CardService {
   }
 
   /**
-   * 🆕 MÉTHODE MISE À JOUR : Applique une récompense (sans gestion d'énergie)
+   * Applique une récompense
    */
-  private async applyReward(userId: string, reward: any): Promise<void> {
+  private async applyReward(user: User, reward: any): Promise<void> {
     switch (reward.type) {
       case 'card':
         if (reward.cardType in AttackType) {
-          await this.addAttackCard(userId, reward.cardType, reward.rarity);
+          await this.addAttackCard(user.id, reward.cardType, reward.rarity);
         } else if (reward.cardType in DefenseType) {
-          await this.addDefenseCard(userId, reward.cardType, reward.rarity);
+          await this.addDefenseCard(user.id, reward.cardType, reward.rarity);
         }
         break;
 
       case 'fragments':
-        await this.addFragments(userId, reward.fragmentType, reward.quantity);
+        await this.addFragments(user.id, reward.fragmentType, reward.quantity);
         break;
 
       case 'tokens':
         await this.database.user.update({
-          where: { discordId: userId },
+          where: { id: user.id },
           data: { tokens: { increment: reward.amount } }
         });
         break;
-
-      // 🗑️ SUPPRIMÉ : cas 'energy' (plus utilisé)
     }
   }
 
@@ -697,7 +695,6 @@ export class CardService {
     }
 
     return {
-      energy: user.energy,
       attackCards: user.attackCards.filter(card => card.quantity > 0),
       defenseCards: user.defenseCards.filter(card => card.quantity > 0),
       fragments: user.cardFragments.filter(fragment => fragment.quantity > 0),
@@ -757,10 +754,6 @@ export class CardService {
       [MissionType.STEAL_BLUEPRINT]: {
         success: "📋 Déguisé en employé, vous accédez aux bureaux de R&D. Les plans de la nouvelle technologie sont là, sur le serveur principal. Quelques manipulations expertes et les fichiers sont à vous.",
         failure: "🔒 La sécurité du bâtiment est renforcée. Votre fausse carte d'accès ne fonctionne pas et vous devez abandonner la mission avant d'être découvert."
-      },
-      [MissionType.SABOTAGE_COMPETITOR]: {
-        success: "⚡ Vous infiltrez les installations de votre concurrent principal. Quelques modifications subtiles dans leur code de minage et leurs opérations seront perturbées pendant des semaines.",
-        failure: "👮 Les agents de sécurité patrouillent plus que d'habitude. Vous ne parvenez pas à approcher des systèmes critiques et devez vous retirer bredouille."
       },
       [MissionType.RESCUE_DATA]: {
         success: "💾 Le serveur compromis crache ses dernières données vitales. Vous naviguez dans le chaos numérique pour extraire l'information cruciale avant que le système ne s'effondre complètement.",

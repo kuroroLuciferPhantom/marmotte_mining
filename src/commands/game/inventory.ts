@@ -1,62 +1,102 @@
-// src/commands/game/leaderboard.ts - Version corrigée
 import { 
   SlashCommandBuilder, 
-  EmbedBuilder, 
   ChatInputCommandInteraction, 
-  ActionRowBuilder, 
-  StringSelectMenuBuilder, 
+  EmbedBuilder, 
   ButtonBuilder, 
+  ActionRowBuilder, 
   ButtonStyle,
+  StringSelectMenuBuilder,
   ComponentType
 } from 'discord.js';
 import { logger } from '../../utils/logger';
 
 export const data = new SlashCommandBuilder()
-  .setName('leaderboard')
-  .setDescription('🏆 Affiche les classements et statistiques des joueurs')
+  .setName('inventory')
+  .setDescription('📦 Affiche votre inventaire complet avec détails et actions')
   .addStringOption(option =>
-    option.setName('type')
-      .setDescription('Type de classement à afficher')
+    option.setName('filtre')
+      .setDescription('Filtrer par catégorie')
       .setRequired(false)
       .addChoices(
-        { name: '🪙 Tokens (Richesse)', value: 'tokens' },
-        { name: '⚔️ Battles (PvP)', value: 'battles' },
-        { name: '💵 Dollars (Activité)', value: 'dollars' },
-        { name: '⛏️ Mining (Production)', value: 'mining' },
-        { name: '📊 Global (Général)', value: 'global' }
-      ))
-  .addIntegerOption(option =>
-    option.setName('limite')
-      .setDescription('Nombre de joueurs à afficher (5-50)')
+        { name: '⛏️ Machines uniquement', value: 'machines' },
+        { name: '🔧 Modules et améliorations', value: 'modules' },
+        { name: '⚡ Énergie et infrastructures', value: 'energy' },
+        { name: '🎒 Objets et consommables', value: 'items' },
+        { name: '💰 Valeur et statistiques', value: 'stats' }
+      )
+  )
+  .addStringOption(option =>
+    option.setName('tri')
+      .setDescription('Trier par')
       .setRequired(false)
-      .setMinValue(5)
-      .setMaxValue(50));
+      .addChoices(
+        { name: 'Niveau (croissant)', value: 'level_asc' },
+        { name: 'Niveau (décroissant)', value: 'level_desc' },
+        { name: 'Efficacité (croissant)', value: 'efficiency_asc' },
+        { name: 'Efficacité (décroissant)', value: 'efficiency_desc' },
+        { name: 'Durabilité (croissant)', value: 'durability_asc' },
+        { name: 'Durabilité (décroissant)', value: 'durability_desc' },
+        { name: 'Valeur (croissant)', value: 'value_asc' },
+        { name: 'Valeur (décroissant)', value: 'value_desc' }
+      )
+  );
 
 export async function execute(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
   try {
     await interaction.deferReply();
-
+    
     const databaseService = services.get('database');
+    const cacheService = services.get('cache');
+    
     if (!databaseService) {
-      throw new Error('Database service not available');
+      throw new Error('Service de base de données non disponible');
     }
 
-    const type = interaction.options.getString('type') || 'tokens';
-    const limit = interaction.options.getInteger('limite') || 15;
+    // 🔍 Récupérer les données utilisateur complètes
+    const user = await databaseService.client.user.findUnique({
+      where: { discordId: interaction.user.id },
+      include: { 
+        machines: {
+          orderBy: { createdAt: 'desc' }
+        },
+        transactions: {
+          where: {
+            type: {
+              in: ['MACHINE_PURCHASE', 'MACHINE_UPGRADE', 'MACHINE_REPAIR']
+            }
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 5
+        }
+      }
+    });
 
-    // Créer l'embed initial
-    const embed = await createLeaderboardEmbed(type, databaseService, limit, interaction.user.id);
-    
-    // Créer les composants de navigation
-    const components = createNavigationComponents();
+    if (!user) {
+      const errorEmbed = new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle('❌ Profil Introuvable')
+        .setDescription('Vous devez d\'abord créer votre profil avec `/register`');
+      
+      await interaction.editReply({ embeds: [errorEmbed] });
+      return;
+    }
+
+    // 📊 Paramètres de filtrage et tri
+    const filterType = interaction.options.getString('filtre');
+    const sortType = interaction.options.getString('tri') || 'level_desc';
+
+    // 🎮 Créer l'affichage principal
+    const inventoryData = await buildInventoryData(user, filterType, sortType, databaseService);
+    const { embeds, components } = await createInventoryDisplay(inventoryData, user, filterType);
 
     const response = await interaction.editReply({ 
-      embeds: [embed], 
+      embeds, 
       components 
     });
 
-    // 🔧 CORRECTION: Gérer les interactions avec le menu et boutons
+    // 🎯 Gérer les interactions avec les boutons
     const collector = response.createMessageComponentCollector({ 
+      componentType: ComponentType.Button,
       time: 300000 // 5 minutes
     });
 
@@ -66,49 +106,45 @@ export async function execute(interaction: ChatInputCommandInteraction, services
         return;
       }
 
-      try {
-        await i.deferUpdate();
-
-        let newType = type;
-        
-        if (i.customId === 'leaderboard_navigation') {
-          // 🔧 CORRECTION: Menu déroulant pour changer de classement
-          newType = (i as any).values[0];
-        } else if (i.customId === 'leaderboard_refresh') {
-          // Actualiser le classement actuel
-          newType = type;
-        }
-
-        // Générer le nouvel embed
-        const newEmbed = await createLeaderboardEmbed(newType, databaseService, limit, i.user.id);
-        
-        await i.editReply({ 
-          embeds: [newEmbed], 
-          components: createNavigationComponents() 
-        });
-
-      } catch (error) {
-        logger.error('Error handling leaderboard interaction:', error);
-      }
+      await handleInventoryAction(i, user, services);
     });
 
     collector.on('end', async () => {
-      // Désactiver les composants après expiration
+      // Désactiver les boutons après expiration
+      const disabledComponents = components.map(row => {
+        const newRow = new ActionRowBuilder<ButtonBuilder>();
+        row.components.forEach(component => {
+          if (component instanceof ButtonBuilder) {
+            newRow.addComponents(
+              ButtonBuilder.from(component).setDisabled(true)
+            );
+          }
+        });
+        return newRow;
+      });
+
       try {
-        const disabledComponents = createNavigationComponents(true);
         await interaction.editReply({ components: disabledComponents });
       } catch (error) {
-        logger.warn('Could not disable leaderboard components:', error);
+        // Message peut-être supprimé, ignorer l'erreur
+        logger.warn('Could not disable inventory buttons:', error);
       }
     });
 
   } catch (error) {
-    logger.error('Error in leaderboard command:', error);
+    logger.error('Error in inventory command:', error);
     
     const errorEmbed = new EmbedBuilder()
       .setColor(0xff0000)
-      .setTitle('💥 Erreur !')
-      .setDescription('Une erreur s\'est produite lors de l\'affichage du classement.')
+      .setTitle('💥 Erreur Système')
+      .setDescription('Une erreur est survenue lors de l\'affichage de votre inventaire.')
+      .addFields([
+        {
+          name: '🔧 Solution',
+          value: 'Réessayez dans quelques instants ou contactez un administrateur.',
+          inline: false
+        }
+      ])
       .setTimestamp();
 
     await interaction.editReply({ embeds: [errorEmbed] });
@@ -116,716 +152,854 @@ export async function execute(interaction: ChatInputCommandInteraction, services
 }
 
 /**
- * 🏗️ Créer l'embed de classement selon le type
+ * 🏗️ Construire les données d'inventaire
  */
-async function createLeaderboardEmbed(type: string, databaseService: any, limit: number, userId: string): Promise<EmbedBuilder> {
-  switch (type) {
-    case 'tokens':
-      return await showTokensLeaderboard(databaseService, limit, userId);
-    case 'battles':
-      return await showBattlesLeaderboard(databaseService, limit, userId);
-    case 'dollars':
-      return await showDollarsLeaderboard(databaseService, limit, userId);
-    case 'mining':
-      return await showMiningLeaderboard(databaseService, limit, userId);
-    case 'global':
-      return await showGlobalLeaderboard(databaseService, limit, userId);
-    default:
-      return await showTokensLeaderboard(databaseService, limit, userId);
+async function buildInventoryData(user: any, filterType: string | null, sortType: string, databaseService: any) {
+  const data: {
+    user: any,
+    machines: any[],
+    totalValue: number,
+    totalHashRate: number,
+    avgEfficiency: number,
+    avgDurability: number,
+    repairNeeded: any[],
+    upgradeAvailable: any[],
+    recentTransactions: any[],
+    energyConsumption: number,
+    dailyProduction: number
+  } = {
+    user,
+    machines: [...user.machines],
+    totalValue: 0,
+    totalHashRate: 0,
+    avgEfficiency: 0,
+    avgDurability: 0,
+    repairNeeded: [] as any[],
+    upgradeAvailable: [] as any[],
+    recentTransactions: user.transactions,
+    energyConsumption: 0,
+    dailyProduction: 0
+  };
+
+  // 📊 Calculer les statistiques des machines
+  if (data.machines.length > 0) {
+    // Trier les machines selon le critère
+    data.machines = sortMachines(data.machines, sortType);
+    
+    // Calculer les totaux
+    data.totalValue = data.machines.reduce((sum, machine) => sum + calculateMachineValue(machine), 0);
+    data.totalHashRate = data.machines.reduce((sum, machine) => sum + calculateMachineHashRate(machine), 0);
+    data.avgEfficiency = data.machines.reduce((sum, machine) => sum + machine.efficiency, 0) / data.machines.length;
+    data.avgDurability = data.machines.reduce((sum, machine) => sum + machine.durability, 0) / data.machines.length;
+    data.energyConsumption = data.machines.reduce((sum, machine) => sum + calculateEnergyConsumption(machine), 0);
+    data.dailyProduction = calculateDailyProduction(data.machines);
+    
+    // Identifier les machines nécessitant attention
+    data.repairNeeded = data.machines.filter(machine => machine.durability < 50);
+    data.upgradeAvailable = data.machines.filter(machine => machine.level < 10);
   }
+
+  return data;
 }
 
 /**
- * 🪙 CLASSEMENT PAR TOKENS (Richesse)
+ * 🎨 Créer l'affichage de l'inventaire
  */
-async function showTokensLeaderboard(databaseService: any, limit: number, userId: string): Promise<EmbedBuilder> {
-  const topUsers = await databaseService.client.user.findMany({
-    where: {
-      NOT: {
-        discordId: {
-          startsWith: 'bot_' // Exclure les bots du classement
-        }
-      }
-    },
-    orderBy: {
-      tokens: 'desc'
-    },
-    take: limit,
-    select: {
-      discordId: true,
-      username: true,
-      tokens: true,
-      createdAt: true
-    }
-  });
+async function createInventoryDisplay(data: any, user: any, filterType: string | null) {
+  const embeds = [];
+  const components = [];
 
-  if (topUsers.length === 0) {
-    return new EmbedBuilder()
-      .setColor(0x95a5a6)
-      .setTitle('🪙 Classement Tokens')
-      .setDescription('Aucun joueur trouvé dans la base de données.')
-      .setTimestamp();
+  if (!filterType || filterType === 'machines') {
+    const machineEmbed = createMachinesEmbed(data);
+    embeds.push(machineEmbed);
   }
 
-  const userPosition = await getUserPosition(databaseService, userId, 'tokens');
-  
+  if (!filterType || filterType === 'stats') {
+    const statsEmbed = createStatsEmbed(data);
+    embeds.push(statsEmbed);
+  }
+
+  if (!filterType || filterType === 'energy') {
+    const energyEmbed = createEnergyEmbed(data);
+    embeds.push(energyEmbed);
+  }
+
+  // 🎮 Créer les boutons d'action
+  const actionButtons = createActionButtons(data);
+  if (actionButtons.components.length > 0) {
+    components.push(actionButtons);
+  }
+
+  // 🔄 Boutons de navigation et filtres
+  const navigationButtons = createNavigationButtons();
+  components.push(navigationButtons);
+
+  return { embeds, components };
+}
+
+/**
+ * ⛏️ Créer l'embed des machines
+ */
+function createMachinesEmbed(data: any): EmbedBuilder {
   const embed = new EmbedBuilder()
-    .setColor(0xFFD700)
-    .setTitle('🪙 **CLASSEMENT TOKENS** 🪙')
-    .setDescription(`**💰 Les plus riches du serveur !**\n\n*Qui a accumulé le plus de tokens grâce au mining et aux battles ?*`)
-    .addFields([
-      {
-        name: '🏆 **TOP PLAYERS**',
-        value: topUsers.map((user: any, index: number) => {
-          const medal = getMedal(index + 1);
-          const isCurrentUser = user.discordId === userId;
-          const userTag = isCurrentUser ? '**→ VOUS ←**' : '';
-          
-          return `${medal} **${index + 1}.** ${user.username} ${userTag}\n💰 **${user.tokens.toFixed(2)}** tokens`;
-        }).join('\n\n'),
-        inline: false
-      }
-    ])
-    .setFooter({ 
-      text: userPosition 
-        ? `Votre position: #${userPosition.position} avec ${userPosition.tokens.toFixed(2)} tokens`
-        : 'Vous n\'êtes pas encore classé'
-    })
+    .setColor(0x8B4513)
+    .setTitle('⛏️ Machines de Minage')
     .setTimestamp();
 
-  return embed;
-}
-
-/**
- * ⚔️ CLASSEMENT BATTLES (PvP) - 🔧 CORRECTION COMPLÈTE
- */
-async function showBattlesLeaderboard(databaseService: any, limit: number, userId: string): Promise<EmbedBuilder> {
-  try {
-    // 🔧 CORRECTION: Récupérer les vraies données de bataille depuis la table BattleEntry
-    const battleEntries = await databaseService.client.battleEntry.findMany({
-      include: {
-        user: {
-          select: {
-            discordId: true,
-            username: true,
-            tokens: true
-          }
-        },
-        battle: {
-          select: {
-            status: true,
-            createdAt: true
-          }
-        }
-      },
-      where: {
-        user: {
-          NOT: {
-            discordId: {
-              startsWith: 'bot_'
-            }
-          }
-        }
-      }
-    });
-
-    // Calculer les statistiques réelles par utilisateur
-    const userStats = new Map();
-    
-    battleEntries.forEach((entry: any) => {
-      const discordId = entry.user.discordId;
-      const username = entry.user.username;
-      
-      if (!userStats.has(discordId)) {
-        userStats.set(discordId, {
-          discordId,
-          username,
-          battlesParticipated: 0,
-          battlesWon: 0,
-          battlesLost: 0,
-          tokens: entry.user.tokens
-        });
-      }
-      
-      const stats = userStats.get(discordId);
-      stats.battlesParticipated++;
-      
-      // 🔧 CORRECTION: Déterminer les victoires selon la position finale
-      // Pour l'instant, on utilise une logique simple basée sur les tokens
-      // À terme, il faudra stocker le classement final dans BattleEntry
-      if (entry.finalPosition === 1) {
-        stats.battlesWon++;
-      } else if (entry.finalPosition > 1) {
-        stats.battlesLost++;
-      }
-    });
-
-    // Convertir en array et calculer les scores
-    const battlers = Array.from(userStats.values())
-      .filter((user: any) => user.battlesParticipated > 0)
-      .map((user: any) => {
-        const totalBattles = user.battlesParticipated;
-        const winRate = totalBattles > 0 ? (user.battlesWon / totalBattles) * 100 : 0;
-        const score = (user.battlesWon * 3) + (totalBattles * 0.5);
-        
-        return {
-          ...user,
-          totalBattles,
-          winRate,
-          score
-        };
-      })
-      .sort((a: any, b: any) => b.score - a.score)
-      .slice(0, limit);
-
-    if (battlers.length === 0) {
-      return new EmbedBuilder()
-        .setColor(0xE74C3C)
-        .setTitle('⚔️ Classement Battles')
-        .setDescription('Aucune bataille n\'a encore été jouée !\n\nUtilisez `/battle create` pour lancer la première guerre !')
-        .setTimestamp();
-    }
-
-    const userBattleStats = battlers.find((user: any) => user.discordId === userId);
-
-    const embed = new EmbedBuilder()
-      .setColor(0xE74C3C)
-      .setTitle('⚔️ **CLASSEMENT BATTLES** ⚔️')
-      .setDescription(`**🎯 Les meilleurs warriors du serveur !**\n\n*Classement basé sur les victoires et la participation aux battles.*`)
-      .addFields([
-        {
-          name: '🏆 **HALL OF FAME**',
-          value: battlers.map((user: any, index: number) => {
-            const medal = getMedal(index + 1);
-            const isCurrentUser = user.discordId === userId;
-            const userTag = isCurrentUser ? '**→ VOUS ←**' : '';
-            
-            return `${medal} **${index + 1}.** ${user.username} ${userTag}\n` +
-                   `🏆 ${user.battlesWon}V | 💀 ${user.battlesLost}D | 📊 ${user.winRate.toFixed(1)}% WR\n` +
-                   `⭐ Score: ${user.score.toFixed(1)}`;
-          }).join('\n\n'),
-          inline: false
-        },
-        {
-          name: '📊 **LÉGENDE**',
-          value: 'V = Victoires | D = Défaites | WR = Win Rate\nScore = (Victoires × 3) + (Participations × 0.5)',
-          inline: false
-        }
-      ])
-      .setFooter({ 
-        text: userBattleStats 
-          ? `Vos stats: #${battlers.findIndex((u: any) => u.discordId === userId) + 1} | ${userBattleStats.battlesWon}V-${userBattleStats.battlesLost}D (${userBattleStats.winRate.toFixed(1)}% WR)`
-          : 'Participez à une battle pour apparaître dans le classement !'
-      })
-      .setTimestamp();
-
+  if (data.machines.length === 0) {
+    embed.setDescription('🔍 **Aucune machine dans votre inventaire**\n\n💡 Visitez la boutique avec `/shop` pour acheter votre première machine!');
     return embed;
-
-  } catch (error) {
-    logger.error('Error in showBattlesLeaderboard:', error);
-    
-    return new EmbedBuilder()
-      .setColor(0xff0000)
-      .setTitle('❌ Erreur Battles')
-      .setDescription('Impossible de charger les statistiques de bataille.')
-      .setTimestamp();
   }
-}
 
-/**
- * 💵 CLASSEMENT DOLLARS (Activité Discord)
- */
-async function showDollarsLeaderboard(databaseService: any, limit: number, userId: string): Promise<EmbedBuilder> {
-  const topUsers = await databaseService.client.user.findMany({
-    where: {
-      NOT: {
-        discordId: {
-          startsWith: 'bot_'
-        }
-      }
-    },
-    orderBy: {
-      dollars: 'desc'
-    },
-    take: limit,
-    select: {
-      discordId: true,
-      username: true,
-      dollars: true,
-      loginStreak: true
+  // Grouper par type
+  const machineGroups = groupMachinesByType(data.machines);
+  let description = `📊 **${data.machines.length} machine(s) au total**\n\n`;
+
+  Object.entries(machineGroups).forEach(([type, machines]: [string, any[]]) => {
+    const machineInfo = getMachineTypeInfo(type);
+    const count = machines.length;
+    const avgLevel = Math.round(machines.reduce((sum, m) => sum + m.level, 0) / count);
+    const avgEfficiency = Math.round(machines.reduce((sum, m) => sum + m.efficiency, 0) / count);
+    const avgDurability = Math.round(machines.reduce((sum, m) => sum + m.durability, 0) / count);
+    const totalHashRate = machines.reduce((sum, m) => sum + calculateMachineHashRate(m), 0);
+    
+    description += `${machineInfo.emoji} **${machineInfo.name}** (×${count})\n`;
+    description += `├ Niveau moy: ${avgLevel} | Hash: ${totalHashRate.toFixed(2)}/s\n`;
+    description += `├ Efficacité: ${avgEfficiency}% | Durabilité: ${avgDurability}%\n`;
+    
+    // Alertes
+    const needRepair = machines.filter(m => m.durability < 50).length;
+    const canUpgrade = machines.filter(m => m.level < 10).length;
+    
+    if (needRepair > 0 || canUpgrade > 0) {
+      description += `└ `;
+      if (needRepair > 0) description += `🔧 ${needRepair} à réparer `;
+      if (canUpgrade > 0) description += `⬆️ ${canUpgrade} améliorables`;
+      description += `\n`;
+    } else {
+      description += `└ ✅ Toutes en bon état\n`;
     }
+    
+    description += `\n`;
   });
 
-  if (topUsers.length === 0) {
-    return new EmbedBuilder()
-      .setColor(0x27AE60)
-      .setTitle('💵 Classement Dollars')
-      .setDescription('Aucun joueur trouvé.')
-      .setTimestamp();
-  }
-
-  const userPosition = await getUserPosition(databaseService, userId, 'dollars');
+  embed.setDescription(description);
   
-  const embed = new EmbedBuilder()
-    .setColor(0x27AE60)
-    .setTitle('💵 **CLASSEMENT DOLLARS** 💵')
-    .setDescription(`**📈 Les plus actifs sur Discord !**\n\n*Classement basé sur l'activité Discord: messages, réactions, présence vocal.*`)
-    .addFields([
-      {
-        name: '🏆 **TOP ACTIFS**',
-        value: topUsers.map((user: any, index: number) => {
-          const medal = getMedal(index + 1);
-          const isCurrentUser = user.discordId === userId;
-          const userTag = isCurrentUser ? '**→ VOUS ←**' : '';
-          const streakEmoji = user.loginStreak > 7 ? '🔥' : user.loginStreak > 3 ? '⚡' : '';
-          
-          return `${medal} **${index + 1}.** ${user.username} ${userTag}\n💵 **${user.dollars.toFixed(2)}$** ${streakEmoji} Streak: ${user.loginStreak}j`;
-        }).join('\n\n'),
-        inline: false
-      },
-      {
-        name: '💡 **COMMENT GAGNER DES DOLLARS**',
-        value: '• Messages Discord (+1$)\n• Réactions (+0.5$)\n• Présence vocale (+2$/h)\n• Connexion quotidienne (+10$ + bonus streak)\n• Salaire hebdomadaire (`/salaire`)',
-        inline: false
-      }
-    ])
-    .setFooter({ 
-      text: userPosition 
-        ? `Votre position: #${userPosition.position} avec ${userPosition.dollars.toFixed(2)}$`
-        : 'Soyez actif sur Discord pour apparaître dans le classement !'
-    })
-    .setTimestamp();
+  // Détails des machines individuelles (top 5)
+  if (data.machines.length > 0) {
+    const topMachines = data.machines.slice(0, 5);
+    let machineDetails = '';
 
-  return embed;
-}
-
-/**
- * ⛏️ CLASSEMENT MINING (Production) - 🔧 CORRECTION DES DONNÉES
- */
-async function showMiningLeaderboard(databaseService: any, limit: number, userId: string): Promise<EmbedBuilder> {
-  try {
-    // 🔧 CORRECTION: Calculer les vraies données de mining depuis les machines
-    const usersWithMachines = await databaseService.client.user.findMany({
-      where: {
-        NOT: {
-          discordId: {
-            startsWith: 'bot_'
-          }
-        }
-      },
-      include: {
-        machines: {
-          select: {
-            type: true,
-            level: true,
-            efficiency: true,
-            createdAt: true
-          }
-        },
-        transactions: {
-          where: {
-            type: 'MINING_REWARD'
-          },
-          select: {
-            amount: true,
-            createdAt: true
-          }
-        }
-      },
-      take: limit * 2 // Prendre plus pour filtrer après calcul
+    topMachines.forEach((machine: any, index: number) => {
+      const machineInfo = getMachineTypeInfo(machine.type);
+      const hashRate = calculateMachineHashRate(machine);
+      const value = calculateMachineValue(machine);
+      
+      const statusEmoji = machine.durability < 30 ? '🔴' : machine.durability < 70 ? '🟡' : '🟢';
+      
+      machineDetails += `**${index + 1}.** ${machineInfo.emoji} Niv.${machine.level} | `;
+      machineDetails += `${hashRate.toFixed(2)}/s | ${statusEmoji} ${machine.durability}%\n`;
     });
-
-    // Calculer les vraies statistiques de mining
-    const minersData = usersWithMachines.map((user: any) => {
-      // Calcul du hash rate total actuel
-      const totalHashRate = user.machines.reduce((sum: number, machine: any) => {
-        const hashRate = calculateMachineHashRate(machine);
-        return sum + hashRate;
-      }, 0);
-
-      // Calcul du total miné depuis les récompenses
-      const totalMined = user.transactions.reduce((sum: number, transaction: any) => {
-        return sum + transaction.amount;
-      }, 0);
-
-      // Estimation des heures de mining (basé sur l'âge des machines)
-      const totalMiningHours = user.machines.reduce((sum: number, machine: any) => {
-        const machineAge = (Date.now() - new Date(machine.createdAt).getTime()) / (1000 * 60 * 60);
-        return sum + Math.max(0, machineAge);
-      }, 0);
-
-      return {
-        discordId: user.discordId,
-        username: user.username,
-        totalMined,
-        totalMiningHours,
-        currentHashRate: totalHashRate,
-        machineCount: user.machines.length,
-        avgHashRate: totalMiningHours > 0 ? totalMined / totalMiningHours : 0
-      };
-    })
-    .filter((user: any) => user.totalMined > 0 || user.machineCount > 0) // Filtrer les vrais mineurs
-    .sort((a: any, b: any) => b.totalMined - a.totalMined)
-    .slice(0, limit);
-
-    if (minersData.length === 0) {
-      return new EmbedBuilder()
-        .setColor(0xE67E22)
-        .setTitle('⛏️ Classement Mining')
-        .setDescription('Aucun mineur trouvé.\n\nAchetez des machines avec `/shop` pour commencer à miner !')
-        .setTimestamp();
-    }
-
-    const userPosition = minersData.findIndex((u: any) => u.discordId === userId) + 1;
-    const userMinerData = minersData.find((u: any) => u.discordId === userId);
     
-    const embed = new EmbedBuilder()
-      .setColor(0xE67E22)
-      .setTitle('⛏️ **CLASSEMENT MINING** ⛏️')
-      .setDescription(`**🔗 Les maîtres de la blockchain !**\n\n*Classement basé sur la production totale de tokens via le mining.*`)
-      .addFields([
-        {
-          name: '🏆 **TOP MINERS**',
-          value: minersData.map((user: any, index: number) => {
-            const medal = getMedal(index + 1);
-            const isCurrentUser = user.discordId === userId;
-            const userTag = isCurrentUser ? '**→ VOUS ←**' : '';
-            
-            return `${medal} **${index + 1}.** ${user.username} ${userTag}\n` +
-                   `⛏️ **${user.totalMined.toFixed(2)}** tokens minés\n` +
-                   `🏭 ${user.machineCount} machines | ⏱️ ${user.totalMiningHours.toFixed(1)}h | 📈 ${user.avgHashRate.toFixed(2)} T/h`;
-          }).join('\n\n'),
-          inline: false
-        }
-      ])
-      .setFooter({ 
-        text: userMinerData 
-          ? `Votre position: #${userPosition} avec ${userMinerData.totalMined.toFixed(2)} tokens minés`
-          : 'Achetez des machines avec `/shop` pour commencer à miner !'
-      })
-      .setTimestamp();
-
-    return embed;
-
-  } catch (error) {
-    logger.error('Error in showMiningLeaderboard:', error);
-    
-    return new EmbedBuilder()
-      .setColor(0xff0000)
-      .setTitle('❌ Erreur Mining')
-      .setDescription('Impossible de charger les statistiques de mining.')
-      .setTimestamp();
-  }
-}
-
-/**
- * 📊 CLASSEMENT GLOBAL (Vue d'ensemble)
- */
-async function showGlobalLeaderboard(databaseService: any, limit: number, userId: string): Promise<EmbedBuilder> {
-  const topUsers = await databaseService.client.user.findMany({
-    where: {
-      NOT: {
-        discordId: {
-          startsWith: 'bot_'
-        }
-      }
-    },
-    take: limit,
-    include: {
-      machines: {
-        select: {
-          type: true
-        }
-      },
-      transactions: {
-        where: {
-          type: 'MINING_REWARD'
-        },
-        select: {
-          amount: true
-        }
-      }
-    }
-  });
-
-  // Calculer un score global pour chaque utilisateur
-  const rankedUsers = topUsers.map((user: any) => {
-    const totalMined = user.transactions.reduce((sum: number, t: any) => sum + t.amount, 0);
-    const battlesWon = user.battlesWon || 0;
-    const battlesLost = user.battlesLost || 0;
-    const totalBattles = battlesWon + battlesLost;
-    const winRate = totalBattles > 0 ? (battlesWon / totalBattles) : 0;
-    
-    // Score global combiné (pondéré)
-    const tokenScore = user.tokens * 1;           // 1x tokens
-    const dollarScore = user.dollars * 0.1;       // 0.1x dollars  
-    const miningScore = totalMined * 2;           // 2x mining
-    const battleScore = battlesWon * 50;          // 50x victoires
-    const machineScore = user.machines.length * 10; // 10x machines
-    
-    const globalScore = tokenScore + dollarScore + miningScore + battleScore + machineScore;
-    
-    return {
-      discordId: user.discordId,
-      username: user.username,
-      tokens: user.tokens,
-      dollars: user.dollars,
-      totalMined,
-      battlesWon,
-      battlesLost,
-      totalBattles,
-      winRate,
-      globalScore,
-      machineCount: user.machines.length
-    };
-  })
-  .sort((a: any, b: any) => b.globalScore - a.globalScore);
-
-  if (rankedUsers.length === 0) {
-    return new EmbedBuilder()
-      .setColor(0x9B59B6)
-      .setTitle('📊 Classement Global')
-      .setDescription('Aucun joueur trouvé.')
-      .setTimestamp();
-  }
-
-  const userGlobalStats = rankedUsers.find((user: any) => user.discordId === userId);
-
-  const embed = new EmbedBuilder()
-    .setColor(0x9B59B6)
-    .setTitle('📊 **CLASSEMENT GLOBAL** 📊')
-    .setDescription(`**🌟 Les légendes du serveur !**\n\n*Classement combiné: Tokens + Mining + Battles + Activité*`)
-    .addFields([
+    embed.addFields([
       {
-        name: '🏆 **HALL OF LEGENDS**',
-        value: rankedUsers.slice(0, Math.min(10, limit)).map((user: any, index: number) => {
-          const medal = getMedal(index + 1);
-          const isCurrentUser = user.discordId === userId;
-          const userTag = isCurrentUser ? '**→ VOUS ←**' : '';
-          
-          // Badges selon les stats
-          let badges = '';
-          if (user.tokens > 1000) badges += '💰';
-          if (user.battlesWon > 5) badges += '⚔️';
-          if (user.totalMined > 500) badges += '⛏️';
-          if (user.machineCount > 3) badges += '🏭';
-          
-          return `${medal} **${index + 1}.** ${user.username} ${badges} ${userTag}\n` +
-                 `⭐ Score: **${user.globalScore.toFixed(0)}** pts\n` +
-                 `💰 ${user.tokens.toFixed(0)}T | ⚔️ ${user.battlesWon}V | ⛏️ ${user.totalMined.toFixed(0)}M`;
-        }).join('\n\n'),
+        name: '🏆 Top 5 Machines',
+        value: machineDetails || 'Aucune machine',
         inline: false
-      },
-      {
-        name: '🏅 **CALCUL DU SCORE**',
-        value: 'Tokens (×1) + Dollars (×0.1) + Mining (×2) + Victoires (×50) + Machines (×10)',
-        inline: false
-      }
-    ])
-    .setFooter({ 
-      text: userGlobalStats 
-        ? `Votre position: #${rankedUsers.findIndex((u: any) => u.discordId === userId) + 1} avec ${userGlobalStats.globalScore.toFixed(0)} points`
-        : 'Participez aux activités pour apparaître dans le classement global !'
-    })
-    .setTimestamp();
-
-  return embed;
-}
-
-/**
- * 🧭 Créer les composants de navigation
- */
-function createNavigationComponents(disabled: boolean = false): ActionRowBuilder<any>[] {
-  const selectMenu = new StringSelectMenuBuilder()
-    .setCustomId('leaderboard_navigation')
-    .setPlaceholder('🔄 Changer de classement...')
-    .setDisabled(disabled)
-    .addOptions([
-      {
-        label: '🪙 Classement Tokens',
-        description: 'Les plus riches du serveur',
-        value: 'tokens',
-        emoji: '🪙'
-      },
-      {
-        label: '⚔️ Classement Battles',
-        description: 'Les meilleurs warriors PvP',
-        value: 'battles',
-        emoji: '⚔️'
-      },
-      {
-        label: '💵 Classement Dollars',
-        description: 'Les plus actifs sur Discord',
-        value: 'dollars',
-        emoji: '💵'
-      },
-      {
-        label: '⛏️ Classement Mining',
-        description: 'Les maîtres de la production',
-        value: 'mining',
-        emoji: '⛏️'
-      },
-      {
-        label: '📊 Classement Global',
-        description: 'Vue d\'ensemble combinée',
-        value: 'global',
-        emoji: '📊'
       }
     ]);
+  }
 
-  const refreshButton = new ButtonBuilder()
-    .setCustomId('leaderboard_refresh')
-    .setLabel('🔄 Actualiser')
-    .setStyle(ButtonStyle.Secondary)
-    .setDisabled(disabled);
+  return embed;
+}
 
-  const row1 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(refreshButton);
+/**
+ * 📊 Créer l'embed des statistiques
+ */
+function createStatsEmbed(data: any): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle('📊 Statistiques d\'Inventaire')
+    .setTimestamp();
 
-  return [row1, row2];
+  const valueFormatted = data.totalValue.toLocaleString('fr-FR');
+  const dailyTokens = (data.dailyProduction * 24).toFixed(2);
+  const weeklyTokens = (data.dailyProduction * 24 * 7).toFixed(2);
+  
+  embed.addFields([
+    {
+      name: '💰 Valeurs',
+      value: `**Inventaire total:** ${valueFormatted} tokens\n**Portefeuille:** ${data.user.tokens.toFixed(2)} tokens\n**Fortune totale:** ${(data.totalValue + data.user.tokens).toLocaleString('fr-FR')} tokens`,
+      inline: true
+    },
+    {
+      name: '⚡ Production',
+      value: `**Hash rate total:** ${data.totalHashRate.toFixed(2)}/s\n**Production/jour:** ${dailyTokens} tokens\n**Production/semaine:** ${weeklyTokens} tokens`,
+      inline: true
+    },
+    {
+      name: '🔧 État Général',
+      value: `**Efficacité moyenne:** ${data.avgEfficiency.toFixed(1)}%\n**Durabilité moyenne:** ${data.avgDurability.toFixed(1)}%\n**Consommation:** ${data.energyConsumption.toFixed(1)} kW/h`,
+      inline: true
+    }
+  ]);
+
+  // Alertes et recommandations
+  let alerts = '';
+  if (data.repairNeeded.length > 0) {
+    alerts += `🔧 **${data.repairNeeded.length} machine(s)** nécessitent une réparation\n`;
+  }
+  if (data.upgradeAvailable.length > 0) {
+    alerts += `⬆️ **${data.upgradeAvailable.length} machine(s)** peuvent être améliorées\n`;
+  }
+  if (data.avgEfficiency < 80) {
+    alerts += `⚠️ Efficacité globale faible (${data.avgEfficiency.toFixed(1)}%)\n`;
+  }
+  if (data.energyConsumption > 100) {
+    alerts += `⚡ Consommation énergétique élevée (${data.energyConsumption.toFixed(1)} kW/h)\n`;
+  }
+
+  if (alerts) {
+    embed.addFields([
+      {
+        name: '⚠️ Alertes et Recommandations',
+        value: alerts,
+        inline: false
+      }
+    ]);
+  }
+
+  // Transactions récentes
+  if (data.recentTransactions.length > 0) {
+    let transactionText = '';
+    data.recentTransactions.slice(0, 3).forEach((transaction: any) => {
+      const date = new Date(transaction.createdAt).toLocaleDateString('fr-FR');
+      const typeEmoji = getTransactionEmoji(transaction.type);
+      transactionText += `${typeEmoji} ${transaction.type.replace('_', ' ').toLowerCase()} - ${date}\n`;
+    });
+    
+    embed.addFields([
+      {
+        name: '📋 Transactions Récentes',
+        value: transactionText,
+        inline: false
+      }
+    ]);
+  }
+
+  return embed;
+}
+
+/**
+ * ⚡ Créer l'embed de l'énergie
+ */
+function createEnergyEmbed(data: any): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setColor(0xf1c40f)
+    .setTitle('⚡ Énergie et Infrastructure')
+    .setTimestamp();
+
+  const energyCost = data.energyConsumption * 0.1; // 0.1 token/kW/h
+  const infrastructure = calculateInfrastructureLevel(data.user);
+  
+  embed.addFields([
+    {
+      name: '🏭 Infrastructure Actuelle',
+      value: `**Niveau:** ${infrastructure.name}\n**Capacité:** ${data.machines.length}/${infrastructure.capacity} machines\n**Coût d'exploitation:** ${energyCost.toFixed(2)} tokens/h`,
+      inline: true
+    },
+    {
+      name: '⚡ Consommation Énergétique',
+      value: `**Actuelle:** ${data.energyConsumption.toFixed(1)} kW/h\n**Coût journalier:** ${(energyCost * 24).toFixed(2)} tokens\n**Efficacité:** ${calculateEnergyEfficiency(data.machines).toFixed(1)}%`,
+      inline: true
+    },
+    {
+      name: '🔮 Améliorations Possibles',
+      value: getEnergyUpgradeRecommendations(data),
+      inline: false
+    }
+  ]);
+
+  return embed;
+}
+
+/**
+ * 🎮 Créer les boutons d'action
+ */
+function createActionButtons(data: any): ActionRowBuilder<ButtonBuilder> {
+  const row = new ActionRowBuilder<ButtonBuilder>();
+
+  // Bouton réparation si nécessaire
+  if (data.repairNeeded.length > 0) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('inventory_repair_all')
+        .setLabel(`🔧 Réparer ${data.repairNeeded.length} machine(s)`)
+        .setStyle(ButtonStyle.Danger)
+    );
+  }
+
+  // Bouton amélioration si possible
+  if (data.upgradeAvailable.length > 0) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('inventory_upgrade_menu')
+        .setLabel(`⬆️ Améliorer machines`)
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  // Bouton vente
+  if (data.machines.length > 0) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId('inventory_sell_menu')
+        .setLabel('💰 Vendre machines')
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+
+  return row;
+}
+
+/**
+ * 🧭 Créer les boutons de navigation
+ */
+function createNavigationButtons(): ActionRowBuilder<ButtonBuilder> {
+  const row = new ActionRowBuilder<ButtonBuilder>();
+
+  row.addComponents(
+    new ButtonBuilder()
+      .setCustomId('inventory_refresh')
+      .setLabel('🔄 Actualiser')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('🔄'),
+    new ButtonBuilder()
+      .setCustomId('inventory_shop')
+      .setLabel('🛒 Boutique')
+      .setStyle(ButtonStyle.Primary)
+      .setEmoji('🛒'),
+    new ButtonBuilder()
+      .setCustomId('inventory_details')
+      .setLabel('📋 Détails')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('📋')
+  );
+
+  return row;
+}
+
+/**
+ * 🎯 Gérer les actions d'inventaire
+ */
+async function handleInventoryAction(interaction: any, user: any, services: Map<string, any>) {
+  const actionId = interaction.customId;
+  
+  try {
+    await interaction.deferUpdate();
+    
+    switch (actionId) {
+      case 'inventory_refresh':
+        // Recharger l'inventaire
+        const refreshedData = await buildInventoryData(user, null, 'level_desc', services.get('database'));
+        const { embeds, components } = await createInventoryDisplay(refreshedData, user, null);
+        await interaction.editReply({ embeds, components });
+        break;
+        
+      case 'inventory_shop':
+        const shopEmbed = new EmbedBuilder()
+          .setColor(0x2ecc71)
+          .setTitle('🛒 Redirection vers la Boutique')
+          .setDescription('Utilisez la commande `/shop` pour acheter de nouvelles machines et équipements!');
+        await interaction.followUp({ embeds: [shopEmbed], ephemeral: true });
+        break;
+        
+      case 'inventory_repair_all':
+      case 'inventory_upgrade_menu':
+      case 'inventory_sell_menu':
+      case 'inventory_details':
+        const comingSoonEmbed = new EmbedBuilder()
+          .setColor(0xf39c12)
+          .setTitle('🚧 Fonctionnalité en Développement')
+          .setDescription('Cette fonctionnalité sera bientôt disponible!\n\nEn attendant, vous pouvez utiliser les commandes `/repair` et `/shop` pour gérer vos machines.');
+        await interaction.followUp({ embeds: [comingSoonEmbed], ephemeral: true });
+        break;
+        
+      default:
+        logger.warn(`Unknown inventory action: ${actionId}`);
+    }
+    
+  } catch (error) {
+    logger.error('Error handling inventory action:', error);
+  }
 }
 
 // ========================
 // 🛠️ FONCTIONS UTILITAIRES
 // ========================
 
-/**
- * Calculer le hash rate d'une machine
- */
-function calculateMachineHashRate(machine: any): number {
-  const baseHashRates: { [key: string]: number } = {
-    'BASIC_RIG': 0.1,
-    'ADVANCED_RIG': 0.5,
-    'QUANTUM_MINER': 2.0,
-    'FUSION_REACTOR': 10.0,
-    'MEGA_FARM': 50.0
+function sortMachines(machines: any[], sortType: string): any[] {
+  return machines.sort((a, b) => {
+    switch (sortType) {
+      case 'level_asc': return a.level - b.level;
+      case 'level_desc': return b.level - a.level;
+      case 'efficiency_asc': return a.efficiency - b.efficiency;
+      case 'efficiency_desc': return b.efficiency - a.efficiency;
+      case 'durability_asc': return a.durability - b.durability;
+      case 'durability_desc': return b.durability - a.durability;
+      case 'value_asc': return calculateMachineValue(a) - calculateMachineValue(b);
+      case 'value_desc': return calculateMachineValue(b) - calculateMachineValue(a);
+      default: return b.level - a.level;
+    }
+  });
+}
+
+function groupMachinesByType(machines: any[]): { [key: string]: any[] } {
+  return machines.reduce((groups, machine) => {
+    if (!groups[machine.type]) {
+      groups[machine.type] = [];
+    }
+    groups[machine.type].push(machine);
+    return groups;
+  }, {});
+}
+
+function getMachineTypeInfo(type: string) {
+  const types: { [key: string]: any } = {
+    'BASIC_RIG': { name: 'Basic Rig', emoji: '🔧', baseCost: 100, baseHashRate: 0.1 },
+    'ADVANCED_RIG': { name: 'Advanced Rig', emoji: '⚙️', baseCost: 500, baseHashRate: 0.5 },
+    'QUANTUM_MINER': { name: 'Quantum Miner', emoji: '🔬', baseCost: 2000, baseHashRate: 2.0 },
+    'FUSION_REACTOR': { name: 'Fusion Reactor', emoji: '⚛️', baseCost: 10000, baseHashRate: 10.0 },
+    'MEGA_FARM': { name: 'Mega Farm', emoji: '🏭', baseCost: 50000, baseHashRate: 50.0 }
   };
   
-  const baseRate = baseHashRates[machine.type] || 0.1;
+  return types[type] || { name: type, emoji: '❓', baseCost: 0, baseHashRate: 0 };
+}
+
+function calculateMachineValue(machine: any): number {
+  const typeInfo = getMachineTypeInfo(machine.type);
+  const levelMultiplier = 1 + (machine.level - 1) * 0.5;
+  const efficiencyMultiplier = machine.efficiency / 100;
+  const durabilityMultiplier = machine.durability / 100;
+  
+  return typeInfo.baseCost * levelMultiplier * efficiencyMultiplier * durabilityMultiplier;
+}
+
+function calculateMachineHashRate(machine: any): number {
+  const typeInfo = getMachineTypeInfo(machine.type);
   const levelMultiplier = 1 + (machine.level - 1) * 0.2;
   const efficiencyMultiplier = machine.efficiency / 100;
   
-  return baseRate * levelMultiplier * efficiencyMultiplier;
+  return typeInfo.baseHashRate * levelMultiplier * efficiencyMultiplier;
+}
+
+function calculateEnergyConsumption(machine: any): number {
+  const typeInfo = getMachineTypeInfo(machine.type);
+  return typeInfo.baseHashRate * machine.level * 0.5;
+}
+
+function calculateDailyProduction(machines: any[]): number {
+  return machines.reduce((total, machine) => {
+    return total + calculateMachineHashRate(machine);
+  }, 0);
+}
+
+function calculateInfrastructureLevel(user: any) {
+  const machineCount = user.machines?.length || 0;
+  const tokens = user.tokens || 0;
+  
+  if (machineCount >= 50 || tokens >= 100000) {
+    return { name: 'Méga Datacenter', capacity: 100 };
+  } else if (machineCount >= 25 || tokens >= 20000) {
+    return { name: 'Complexe Minier', capacity: 50 };
+  } else if (machineCount >= 10 || tokens >= 5000) {
+    return { name: 'Entrepôt Industriel', capacity: 25 };
+  } else if (machineCount >= 3 || tokens >= 1000) {
+    return { name: 'Atelier Pro', capacity: 10 };
+  } else {
+    return { name: 'Garage Personnel', capacity: 5 };
+  }
+}
+
+function calculateEnergyEfficiency(machines: any[]): number {
+  if (machines.length === 0) return 100;
+  
+  const totalEfficiency = machines.reduce((sum, machine) => sum + machine.efficiency, 0);
+  return totalEfficiency / machines.length;
+}
+
+function getEnergyUpgradeRecommendations(data: any): string {
+  const recommendations = [];
+  
+  if (data.energyConsumption > 50) {
+    recommendations.push('⚡ Panneaux Solaires (-20% coût énergie)');
+  }
+  
+  if (data.energyConsumption > 100) {
+    recommendations.push('🌪️ Éolienne (-30% coût énergie)');
+  }
+  
+  if (data.energyConsumption > 200) {
+    recommendations.push('⚛️ Centrale Nucléaire (-50% coût énergie)');
+  }
+  
+  if (data.machines.length >= 10) {
+    recommendations.push('🔧 Système de Refroidissement (+15% efficacité)');
+  }
+  
+  if (data.avgEfficiency < 80) {
+    recommendations.push('🤖 IA d\'Optimisation (+10% rendement global)');
+  }
+  
+  if (recommendations.length === 0) {
+    return '✅ Infrastructure optimale pour votre niveau actuel';
+  }
+  
+  return recommendations.slice(0, 3).join('\n');
+}
+
+function getTransactionEmoji(type: string): string {
+  const emojis: { [key: string]: string } = {
+    'MACHINE_PURCHASE': '🛒',
+    'MACHINE_UPGRADE': '⬆️',
+    'MACHINE_REPAIR': '🔧',
+    'MACHINE_SALE': '💰',
+    'MINING_REWARD': '⛏️'
+  };
+  
+  return emojis[type] || '📋';
 }
 
 /**
- * Obtenir la position d'un utilisateur
+ * 🔄 Fonction pour créer un embed de machine détaillée
  */
-async function getUserPosition(databaseService: any, discordId: string, field: string) {
-  try {
-    const user = await databaseService.client.user.findUnique({
-      where: { discordId },
-      select: {
-        [field]: true
+function createMachineDetailEmbed(machine: any, index: number): EmbedBuilder {
+  const typeInfo = getMachineTypeInfo(machine.type);
+  const hashRate = calculateMachineHashRate(machine);
+  const value = calculateMachineValue(machine);
+  const energyConsumption = calculateEnergyConsumption(machine);
+  
+  const statusColor = machine.durability < 30 ? 0xff0000 : 
+                     machine.durability < 70 ? 0xffa500 : 0x00ff00;
+  
+  const embed = new EmbedBuilder()
+    .setColor(statusColor)
+    .setTitle(`${typeInfo.emoji} ${typeInfo.name} #${index + 1}`)
+    .setDescription(`Machine de niveau ${machine.level} avec ${machine.efficiency}% d'efficacité`)
+    .addFields([
+      {
+        name: '⚡ Performance',
+        value: `**Hash Rate:** ${hashRate.toFixed(3)}/s\n**Efficacité:** ${machine.efficiency}%\n**Consommation:** ${energyConsumption.toFixed(1)} kW/h`,
+        inline: true
+      },
+      {
+        name: '🔧 État',
+        value: `**Durabilité:** ${machine.durability}%\n**Niveau:** ${machine.level}/10\n**Statut:** ${getStatusText(machine)}`,
+        inline: true
+      },
+      {
+        name: '💰 Valeur',
+        value: `**Actuelle:** ${value.toFixed(0)} tokens\n**Coût upgrade:** ${calculateUpgradeCost(machine)} tokens\n**Coût réparation:** ${calculateRepairCost(machine)} tokens`,
+        inline: true
       }
-    });
+    ])
+    .setTimestamp();
+  
+  // Ajouter des recommandations
+  const recommendations = getMachineRecommendations(machine);
+  if (recommendations.length > 0) {
+    embed.addFields([
+      {
+        name: '💡 Recommandations',
+        value: recommendations.join('\n'),
+        inline: false
+      }
+    ]);
+  }
+  
+  return embed;
+}
 
-    if (!user) return null;
+function getStatusText(machine: any): string {
+  if (machine.durability < 20) return '🔴 Critique';
+  if (machine.durability < 50) return '🟡 Attention';
+  if (machine.durability < 80) return '🟠 Bon';
+  return '🟢 Excellent';
+}
 
-    const usersAbove = await databaseService.client.user.count({
-      where: {
-        [field]: {
-          gt: user[field]
+function getMachineRecommendations(machine: any): string[] {
+  const recommendations = [];
+  
+  if (machine.durability < 30) {
+    recommendations.push('🔧 Réparation urgente recommandée');
+  } else if (machine.durability < 70) {
+    recommendations.push('🔧 Réparation conseillée bientôt');
+  }
+  
+  if (machine.level < 5 && machine.durability > 50) {
+    recommendations.push('⬆️ Amélioration possible pour +20% performance');
+  }
+  
+  if (machine.efficiency < 80) {
+    recommendations.push('🔧 Maintenance préventive pour améliorer l\'efficacité');
+  }
+  
+  if (machine.level >= 8) {
+    recommendations.push('🏆 Machine haute performance - Excellent investissement');
+  }
+  
+  return recommendations;
+}
+
+function calculateUpgradeCost(machine: any): number {
+  const typeInfo = getMachineTypeInfo(machine.type);
+  return Math.floor(typeInfo.baseCost * 0.5 * machine.level);
+}
+
+function calculateRepairCost(machine: any): number {
+  const typeInfo = getMachineTypeInfo(machine.type);
+  const damagePercent = (100 - machine.durability) / 100;
+  return Math.floor(typeInfo.baseCost * 0.2 * damagePercent);
+}
+
+/**
+ * 📊 Créer un embed de comparaison de machines
+ */
+function createMachineComparisonEmbed(machines: any[]): EmbedBuilder {
+  const embed = new EmbedBuilder()
+    .setColor(0x3498db)
+    .setTitle('📊 Comparaison des Machines')
+    .setDescription('Analyse comparative de vos meilleures machines');
+  
+  // Trier par hash rate décroissant
+  const topMachines = machines
+    .sort((a, b) => calculateMachineHashRate(b) - calculateMachineHashRate(a))
+    .slice(0, 5);
+  
+  let comparison = '';
+  topMachines.forEach((machine, index) => {
+    const typeInfo = getMachineTypeInfo(machine.type);
+    const hashRate = calculateMachineHashRate(machine);
+    const efficiency = machine.efficiency;
+    const roi = calculateROI(machine);
+    
+    comparison += `**${index + 1}.** ${typeInfo.emoji} ${typeInfo.name} Niv.${machine.level}\n`;
+    comparison += `├ Hash: ${hashRate.toFixed(3)}/s | Eff: ${efficiency}%\n`;
+    comparison += `└ ROI: ${roi.toFixed(1)} jours | ${getPerformanceRating(machine)}\n\n`;
+  });
+  
+  embed.addFields([
+    {
+      name: '🏆 Top 5 Machines par Performance',
+      value: comparison || 'Aucune machine à comparer',
+      inline: false
+    }
+  ]);
+  
+  return embed;
+}
+
+function calculateROI(machine: any): number {
+  const value = calculateMachineValue(machine);
+  const dailyProduction = calculateMachineHashRate(machine) * 24;
+  return value / Math.max(dailyProduction, 0.001); // Éviter division par zéro
+}
+
+function getPerformanceRating(machine: any): string {
+  const hashRate = calculateMachineHashRate(machine);
+  const efficiency = machine.efficiency;
+  const level = machine.level;
+  
+  const score = (hashRate * 10) + (efficiency / 10) + (level * 5);
+  
+  if (score >= 100) return '🌟 Légendaire';
+  if (score >= 80) return '💎 Excellent';
+  if (score >= 60) return '🥇 Très Bon';
+  if (score >= 40) return '🥈 Bon';
+  if (score >= 20) return '🥉 Correct';
+  return '📈 À améliorer';
+}
+
+/**
+ * 🎯 Créer un système de pagination pour les machines
+ */
+function createPaginatedMachineView(machines: any[], page: number = 0, itemsPerPage: number = 5) {
+  const totalPages = Math.ceil(machines.length / itemsPerPage);
+  const startIndex = page * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, machines.length);
+  
+  const pageData = {
+    machines: machines.slice(startIndex, endIndex),
+    currentPage: page,
+    totalPages,
+    totalItems: machines.length,
+    startIndex: startIndex + 1,
+    endIndex
+  };
+  
+  return pageData;
+}
+
+/**
+ * 🔍 Créer des embeds de détail par catégorie
+ */
+function createCategoryDetailEmbed(category: string, data: any): EmbedBuilder {
+  const embed = new EmbedBuilder().setTimestamp();
+  
+  switch (category) {
+    case 'machines':
+      return createMachinesEmbed(data);
+      
+    case 'stats':
+      return createStatsEmbed(data);
+      
+    case 'energy':
+      return createEnergyEmbed(data);
+      
+    case 'comparison':
+      return createMachineComparisonEmbed(data.machines);
+      
+    default:
+      embed.setColor(0xff0000)
+           .setTitle('❌ Catégorie Inconnue')
+           .setDescription('Cette catégorie n\'existe pas.');
+      return embed;
+  }
+}
+
+/**
+ * 💾 Sauvegarder les préférences d'affichage utilisateur
+ */
+async function saveUserPreferences(userId: string, preferences: any, cacheService: any) {
+  try {
+    const key = `inventory_prefs:${userId}`;
+    await cacheService.set(key, JSON.stringify(preferences), 3600); // 1 heure
+  } catch (error) {
+    logger.warn('Could not save user inventory preferences:', error);
+  }
+}
+
+/**
+ * 📖 Récupérer les préférences d'affichage utilisateur
+ */
+async function getUserPreferences(userId: string, cacheService: any) {
+  try {
+    const key = `inventory_prefs:${userId}`;
+    const cached = await cacheService.get(key);
+    return cached ? JSON.parse(cached) : { sortType: 'level_desc', filterType: null };
+  } catch (error) {
+    logger.warn('Could not load user inventory preferences:', error);
+    return { sortType: 'level_desc', filterType: null };
+  }
+}
+
+/**
+ * 🎨 Créer une barre de progression visuelle
+ */
+function createProgressBar(current: number, max: number, length: number = 10): string {
+  const percentage = Math.min(current / max, 1);
+  const filledLength = Math.round(length * percentage);
+  const emptyLength = length - filledLength;
+  
+  const filled = '█'.repeat(filledLength);
+  const empty = '░'.repeat(emptyLength);
+  
+  return `[${filled}${empty}] ${Math.round(percentage * 100)}%`;
+}
+
+/**
+ * 📈 Calculer les tendances de performance
+ */
+function calculatePerformanceTrends(machines: any[]) {
+  const trends = {
+    totalMachines: machines.length,
+    avgLevel: 0,
+    avgEfficiency: 0,
+    avgDurability: 0,
+    highPerformanceCount: 0,
+    needMaintenanceCount: 0,
+    upgradeableCount: 0
+  };
+  
+  if (machines.length === 0) return trends;
+  
+  trends.avgLevel = machines.reduce((sum, m) => sum + m.level, 0) / machines.length;
+  trends.avgEfficiency = machines.reduce((sum, m) => sum + m.efficiency, 0) / machines.length;
+  trends.avgDurability = machines.reduce((sum, m) => sum + m.durability, 0) / machines.length;
+  
+  trends.highPerformanceCount = machines.filter(m => m.level >= 7 && m.efficiency >= 85).length;
+  trends.needMaintenanceCount = machines.filter(m => m.durability < 50).length;
+  trends.upgradeableCount = machines.filter(m => m.level < 10).length;
+  
+  return trends;
+}
+
+/**
+ * 💡 Générer des conseils intelligents
+ */
+function generateSmartRecommendations(data: any): string[] {
+  const recommendations = [];
+  const trends = calculatePerformanceTrends(data.machines);
+  
+  // Conseils basés sur l'efficacité moyenne
+  if (trends.avgEfficiency < 70) {
+    recommendations.push('🔧 Votre efficacité moyenne est faible. Pensez à effectuer des réparations.');
+  } else if (trends.avgEfficiency >= 90) {
+    recommendations.push('🌟 Excellente efficacité ! Continuez cette maintenance optimale.');
+  }
+  
+  // Conseils basés sur la durabilité
+  if (trends.needMaintenanceCount > trends.totalMachines * 0.3) {
+    recommendations.push(`⚠️ ${trends.needMaintenanceCount} machines nécessitent une attention urgente.`);
+  }
+  
+  // Conseils d'investissement
+  if (trends.avgLevel < 3 && data.user.tokens > 1000) {
+    recommendations.push('📈 Vous avez les moyens d\'améliorer vos machines pour augmenter la production.');
+  }
+  
+  // Conseils d'optimisation énergétique
+  if (data.energyConsumption > 100 && trends.avgEfficiency < 80) {
+    recommendations.push('⚡ Optimisez l\'efficacité avant d\'investir dans plus de machines.');
+  }
+  
+  // Conseils de diversification
+  const uniqueTypes = new Set(data.machines.map((m: any) => m.type)).size;
+  if (uniqueTypes < 3 && data.machines.length > 5) {
+    recommendations.push('🎯 Diversifiez vos types de machines pour optimiser les rendements.');
+  }
+  
+  return recommendations.slice(0, 4); // Maximum 4 conseils
+}
+
+/**
+ * 🔄 Mise à jour automatique des données en temps réel
+ */
+async function refreshInventoryData(userId: string, services: Map<string, any>) {
+  try {
+    const databaseService = services.get('database');
+    
+    const updatedUser = await databaseService.client.user.findUnique({
+      where: { discordId: userId },
+      include: { 
+        machines: {
+          orderBy: { createdAt: 'desc' }
         },
-        NOT: {
-          discordId: {
-            startsWith: 'bot_'
-          }
+        transactions: {
+          where: {
+            type: {
+              in: ['MACHINE_PURCHASE', 'MACHINE_UPGRADE', 'MACHINE_REPAIR']
+            }
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 5
         }
       }
     });
-
-    return {
-      position: usersAbove + 1,
-      [field]: user[field]
-    };
+    
+    return updatedUser;
   } catch (error) {
-    logger.error('Error getting user position:', error);
+    logger.error('Error refreshing inventory data:', error);
     return null;
-  }
-}
-
-/**
- * Obtenir les médailles
- */
-function getMedal(position: number): string {
-  switch (position) {
-    case 1: return '🥇';
-    case 2: return '🥈';
-    case 3: return '🥉';
-    case 4:
-    case 5: return '🏅';
-    default: return '📊';
-  }
-}
-
-/**
- * 🔧 CORRECTION: Gestionnaire d'interactions pour les autres fichiers
- */
-export async function handleLeaderboardInteraction(interaction: any, services: Map<string, any>) {
-  const actionId = interaction.customId;
-  const databaseService = services.get('database');
-  
-  try {
-    await interaction.deferUpdate();
-    
-    let newType = 'tokens';
-    
-    if (actionId === 'leaderboard_navigation') {
-      newType = interaction.values[0];
-    } else if (actionId === 'leaderboard_refresh') {
-      // Pour refresh, on garde le type actuel (à déterminer depuis l'embed)
-      const currentEmbed = interaction.message.embeds[0];
-      if (currentEmbed?.title?.includes('TOKENS')) newType = 'tokens';
-      else if (currentEmbed?.title?.includes('BATTLES')) newType = 'battles';
-      else if (currentEmbed?.title?.includes('DOLLARS')) newType = 'dollars';
-      else if (currentEmbed?.title?.includes('MINING')) newType = 'mining';
-      else if (currentEmbed?.title?.includes('GLOBAL')) newType = 'global';
-    }
-    
-    const newEmbed = await createLeaderboardEmbed(newType, databaseService, 15, interaction.user.id);
-    
-    await interaction.editReply({ 
-      embeds: [newEmbed], 
-      components: createNavigationComponents() 
-    });
-    
-  } catch (error) {
-    logger.error('Error handling leaderboard interaction:', error);
-  }
-}
-
-/**
- * 🔧 CORRECTION: Fonction pour battle.ts
- */
-export async function handleBattleLeaderboard(interaction: ChatInputCommandInteraction, services: Map<string, any>) {
-  try {
-    await interaction.deferReply();
-    
-    const databaseService = services.get('database');
-    const embed = await showBattlesLeaderboard(databaseService, 15, interaction.user.id);
-    const components = createNavigationComponents();
-    
-    const response = await interaction.editReply({ 
-      embeds: [embed], 
-      components 
-    });
-
-    // Gérer les interactions
-    const collector = response.createMessageComponentCollector({ 
-      time: 300000 
-    });
-
-    collector.on('collect', async (i) => {
-      if (i.user.id !== interaction.user.id) {
-        await i.reply({ content: '❌ Cette interaction ne vous appartient pas.', ephemeral: true });
-        return;
-      }
-      
-      await handleLeaderboardInteraction(i, services);
-    });
-
-  } catch (error) {
-    logger.error('Error in handleBattleLeaderboard:', error);
   }
 }
