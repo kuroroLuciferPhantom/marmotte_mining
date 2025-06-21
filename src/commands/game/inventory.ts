@@ -53,20 +53,19 @@ export async function execute(interaction: ChatInputCommandInteraction, services
     }
 
     // 🔍 Récupérer les données utilisateur complètes
+    // 🔧 CORRECTION: Retirer l'orderBy problématique sur createdAt
     const user = await databaseService.client.user.findUnique({
       where: { discordId: interaction.user.id },
       include: { 
-        machines: {
-          orderBy: { createdAt: 'desc' }
-        },
+        machines: true, // 🔧 CORRECTION: Tri simple sans orderBy problématique
         transactions: {
           where: {
             type: {
               in: ['MACHINE_PURCHASE', 'MACHINE_UPGRADE', 'MACHINE_REPAIR']
             }
           },
-          orderBy: { createdAt: 'desc' },
-          take: 5
+          take: 5, // 🔧 CORRECTION: Limiter pour éviter les surcharges
+          orderBy: { timestamp: 'desc' } // 🔧 CORRECTION: Utiliser 'timestamp' au lieu de 'createdAt'
         }
       }
     });
@@ -169,14 +168,14 @@ async function buildInventoryData(user: any, filterType: string | null, sortType
     dailyProduction: number
   } = {
     user,
-    machines: [...user.machines],
+    machines: [...(user.machines || [])], // 🔧 CORRECTION: Vérifier que machines existe
     totalValue: 0,
     totalHashRate: 0,
     avgEfficiency: 0,
     avgDurability: 0,
     repairNeeded: [] as any[],
     upgradeAvailable: [] as any[],
-    recentTransactions: user.transactions,
+    recentTransactions: user.transactions || [], // 🔧 CORRECTION: Fallback pour transactions
     energyConsumption: 0,
     dailyProduction: 0
   };
@@ -222,12 +221,6 @@ async function createInventoryDisplay(data: any, user: any, filterType: string |
   if (!filterType || filterType === 'energy') {
     const energyEmbed = createEnergyEmbed(data);
     embeds.push(energyEmbed);
-  }
-
-  // 🎮 Créer les boutons d'action
-  const actionButtons = createActionButtons(data);
-  if (actionButtons.components.length > 0) {
-    components.push(actionButtons);
   }
 
   // 🔄 Boutons de navigation et filtres
@@ -293,7 +286,6 @@ function createMachinesEmbed(data: any): EmbedBuilder {
     topMachines.forEach((machine: any, index: number) => {
       const machineInfo = getMachineTypeInfo(machine.type);
       const hashRate = calculateMachineHashRate(machine);
-      const value = calculateMachineValue(machine);
       
       const statusEmoji = machine.durability < 30 ? '🔴' : machine.durability < 70 ? '🟡' : '🟢';
       
@@ -373,7 +365,8 @@ function createStatsEmbed(data: any): EmbedBuilder {
   if (data.recentTransactions.length > 0) {
     let transactionText = '';
     data.recentTransactions.slice(0, 3).forEach((transaction: any) => {
-      const date = new Date(transaction.createdAt).toLocaleDateString('fr-FR');
+      // 🔧 CORRECTION: Utiliser 'timestamp' au lieu de 'createdAt'
+      const date = new Date(transaction.timestamp).toLocaleDateString('fr-FR');
       const typeEmoji = getTransactionEmoji(transaction.type);
       transactionText += `${typeEmoji} ${transaction.type.replace('_', ' ').toLowerCase()} - ${date}\n`;
     });
@@ -424,45 +417,6 @@ function createEnergyEmbed(data: any): EmbedBuilder {
 }
 
 /**
- * 🎮 Créer les boutons d'action
- */
-function createActionButtons(data: any): ActionRowBuilder<ButtonBuilder> {
-  const row = new ActionRowBuilder<ButtonBuilder>();
-
-  // Bouton réparation si nécessaire
-  if (data.repairNeeded.length > 0) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId('inventory_repair_all')
-        .setLabel(`🔧 Réparer ${data.repairNeeded.length} machine(s)`)
-        .setStyle(ButtonStyle.Danger)
-    );
-  }
-
-  // Bouton amélioration si possible
-  if (data.upgradeAvailable.length > 0) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId('inventory_upgrade_menu')
-        .setLabel(`⬆️ Améliorer machines`)
-        .setStyle(ButtonStyle.Primary)
-    );
-  }
-
-  // Bouton vente
-  if (data.machines.length > 0) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId('inventory_sell_menu')
-        .setLabel('💰 Vendre machines')
-        .setStyle(ButtonStyle.Secondary)
-    );
-  }
-
-  return row;
-}
-
-/**
  * 🧭 Créer les boutons de navigation
  */
 function createNavigationButtons(): ActionRowBuilder<ButtonBuilder> {
@@ -474,16 +428,6 @@ function createNavigationButtons(): ActionRowBuilder<ButtonBuilder> {
       .setLabel('🔄 Actualiser')
       .setStyle(ButtonStyle.Success)
       .setEmoji('🔄'),
-    new ButtonBuilder()
-      .setCustomId('inventory_shop')
-      .setLabel('🛒 Boutique')
-      .setStyle(ButtonStyle.Primary)
-      .setEmoji('🛒'),
-    new ButtonBuilder()
-      .setCustomId('inventory_details')
-      .setLabel('📋 Détails')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('📋')
   );
 
   return row;
@@ -504,25 +448,6 @@ async function handleInventoryAction(interaction: any, user: any, services: Map<
         const refreshedData = await buildInventoryData(user, null, 'level_desc', services.get('database'));
         const { embeds, components } = await createInventoryDisplay(refreshedData, user, null);
         await interaction.editReply({ embeds, components });
-        break;
-        
-      case 'inventory_shop':
-        const shopEmbed = new EmbedBuilder()
-          .setColor(0x2ecc71)
-          .setTitle('🛒 Redirection vers la Boutique')
-          .setDescription('Utilisez la commande `/shop` pour acheter de nouvelles machines et équipements!');
-        await interaction.followUp({ embeds: [shopEmbed], ephemeral: true });
-        break;
-        
-      case 'inventory_repair_all':
-      case 'inventory_upgrade_menu':
-      case 'inventory_sell_menu':
-      case 'inventory_details':
-        const comingSoonEmbed = new EmbedBuilder()
-          .setColor(0xf39c12)
-          .setTitle('🚧 Fonctionnalité en Développement')
-          .setDescription('Cette fonctionnalité sera bientôt disponible!\n\nEn attendant, vous pouvez utiliser les commandes `/repair` et `/shop` pour gérer vos machines.');
-        await interaction.followUp({ embeds: [comingSoonEmbed], ephemeral: true });
         break;
         
       default:
@@ -668,338 +593,4 @@ function getTransactionEmoji(type: string): string {
   };
   
   return emojis[type] || '📋';
-}
-
-/**
- * 🔄 Fonction pour créer un embed de machine détaillée
- */
-function createMachineDetailEmbed(machine: any, index: number): EmbedBuilder {
-  const typeInfo = getMachineTypeInfo(machine.type);
-  const hashRate = calculateMachineHashRate(machine);
-  const value = calculateMachineValue(machine);
-  const energyConsumption = calculateEnergyConsumption(machine);
-  
-  const statusColor = machine.durability < 30 ? 0xff0000 : 
-                     machine.durability < 70 ? 0xffa500 : 0x00ff00;
-  
-  const embed = new EmbedBuilder()
-    .setColor(statusColor)
-    .setTitle(`${typeInfo.emoji} ${typeInfo.name} #${index + 1}`)
-    .setDescription(`Machine de niveau ${machine.level} avec ${machine.efficiency}% d'efficacité`)
-    .addFields([
-      {
-        name: '⚡ Performance',
-        value: `**Hash Rate:** ${hashRate.toFixed(3)}/s\n**Efficacité:** ${machine.efficiency}%\n**Consommation:** ${energyConsumption.toFixed(1)} kW/h`,
-        inline: true
-      },
-      {
-        name: '🔧 État',
-        value: `**Durabilité:** ${machine.durability}%\n**Niveau:** ${machine.level}/10\n**Statut:** ${getStatusText(machine)}`,
-        inline: true
-      },
-      {
-        name: '💰 Valeur',
-        value: `**Actuelle:** ${value.toFixed(0)} tokens\n**Coût upgrade:** ${calculateUpgradeCost(machine)} tokens\n**Coût réparation:** ${calculateRepairCost(machine)} tokens`,
-        inline: true
-      }
-    ])
-    .setTimestamp();
-  
-  // Ajouter des recommandations
-  const recommendations = getMachineRecommendations(machine);
-  if (recommendations.length > 0) {
-    embed.addFields([
-      {
-        name: '💡 Recommandations',
-        value: recommendations.join('\n'),
-        inline: false
-      }
-    ]);
-  }
-  
-  return embed;
-}
-
-function getStatusText(machine: any): string {
-  if (machine.durability < 20) return '🔴 Critique';
-  if (machine.durability < 50) return '🟡 Attention';
-  if (machine.durability < 80) return '🟠 Bon';
-  return '🟢 Excellent';
-}
-
-function getMachineRecommendations(machine: any): string[] {
-  const recommendations = [];
-  
-  if (machine.durability < 30) {
-    recommendations.push('🔧 Réparation urgente recommandée');
-  } else if (machine.durability < 70) {
-    recommendations.push('🔧 Réparation conseillée bientôt');
-  }
-  
-  if (machine.level < 5 && machine.durability > 50) {
-    recommendations.push('⬆️ Amélioration possible pour +20% performance');
-  }
-  
-  if (machine.efficiency < 80) {
-    recommendations.push('🔧 Maintenance préventive pour améliorer l\'efficacité');
-  }
-  
-  if (machine.level >= 8) {
-    recommendations.push('🏆 Machine haute performance - Excellent investissement');
-  }
-  
-  return recommendations;
-}
-
-function calculateUpgradeCost(machine: any): number {
-  const typeInfo = getMachineTypeInfo(machine.type);
-  return Math.floor(typeInfo.baseCost * 0.5 * machine.level);
-}
-
-function calculateRepairCost(machine: any): number {
-  const typeInfo = getMachineTypeInfo(machine.type);
-  const damagePercent = (100 - machine.durability) / 100;
-  return Math.floor(typeInfo.baseCost * 0.2 * damagePercent);
-}
-
-/**
- * 📊 Créer un embed de comparaison de machines
- */
-function createMachineComparisonEmbed(machines: any[]): EmbedBuilder {
-  const embed = new EmbedBuilder()
-    .setColor(0x3498db)
-    .setTitle('📊 Comparaison des Machines')
-    .setDescription('Analyse comparative de vos meilleures machines');
-  
-  // Trier par hash rate décroissant
-  const topMachines = machines
-    .sort((a, b) => calculateMachineHashRate(b) - calculateMachineHashRate(a))
-    .slice(0, 5);
-  
-  let comparison = '';
-  topMachines.forEach((machine, index) => {
-    const typeInfo = getMachineTypeInfo(machine.type);
-    const hashRate = calculateMachineHashRate(machine);
-    const efficiency = machine.efficiency;
-    const roi = calculateROI(machine);
-    
-    comparison += `**${index + 1}.** ${typeInfo.emoji} ${typeInfo.name} Niv.${machine.level}\n`;
-    comparison += `├ Hash: ${hashRate.toFixed(3)}/s | Eff: ${efficiency}%\n`;
-    comparison += `└ ROI: ${roi.toFixed(1)} jours | ${getPerformanceRating(machine)}\n\n`;
-  });
-  
-  embed.addFields([
-    {
-      name: '🏆 Top 5 Machines par Performance',
-      value: comparison || 'Aucune machine à comparer',
-      inline: false
-    }
-  ]);
-  
-  return embed;
-}
-
-function calculateROI(machine: any): number {
-  const value = calculateMachineValue(machine);
-  const dailyProduction = calculateMachineHashRate(machine) * 24;
-  return value / Math.max(dailyProduction, 0.001); // Éviter division par zéro
-}
-
-function getPerformanceRating(machine: any): string {
-  const hashRate = calculateMachineHashRate(machine);
-  const efficiency = machine.efficiency;
-  const level = machine.level;
-  
-  const score = (hashRate * 10) + (efficiency / 10) + (level * 5);
-  
-  if (score >= 100) return '🌟 Légendaire';
-  if (score >= 80) return '💎 Excellent';
-  if (score >= 60) return '🥇 Très Bon';
-  if (score >= 40) return '🥈 Bon';
-  if (score >= 20) return '🥉 Correct';
-  return '📈 À améliorer';
-}
-
-/**
- * 🎯 Créer un système de pagination pour les machines
- */
-function createPaginatedMachineView(machines: any[], page: number = 0, itemsPerPage: number = 5) {
-  const totalPages = Math.ceil(machines.length / itemsPerPage);
-  const startIndex = page * itemsPerPage;
-  const endIndex = Math.min(startIndex + itemsPerPage, machines.length);
-  
-  const pageData = {
-    machines: machines.slice(startIndex, endIndex),
-    currentPage: page,
-    totalPages,
-    totalItems: machines.length,
-    startIndex: startIndex + 1,
-    endIndex
-  };
-  
-  return pageData;
-}
-
-/**
- * 🔍 Créer des embeds de détail par catégorie
- */
-function createCategoryDetailEmbed(category: string, data: any): EmbedBuilder {
-  const embed = new EmbedBuilder().setTimestamp();
-  
-  switch (category) {
-    case 'machines':
-      return createMachinesEmbed(data);
-      
-    case 'stats':
-      return createStatsEmbed(data);
-      
-    case 'energy':
-      return createEnergyEmbed(data);
-      
-    case 'comparison':
-      return createMachineComparisonEmbed(data.machines);
-      
-    default:
-      embed.setColor(0xff0000)
-           .setTitle('❌ Catégorie Inconnue')
-           .setDescription('Cette catégorie n\'existe pas.');
-      return embed;
-  }
-}
-
-/**
- * 💾 Sauvegarder les préférences d'affichage utilisateur
- */
-async function saveUserPreferences(userId: string, preferences: any, cacheService: any) {
-  try {
-    const key = `inventory_prefs:${userId}`;
-    await cacheService.set(key, JSON.stringify(preferences), 3600); // 1 heure
-  } catch (error) {
-    logger.warn('Could not save user inventory preferences:', error);
-  }
-}
-
-/**
- * 📖 Récupérer les préférences d'affichage utilisateur
- */
-async function getUserPreferences(userId: string, cacheService: any) {
-  try {
-    const key = `inventory_prefs:${userId}`;
-    const cached = await cacheService.get(key);
-    return cached ? JSON.parse(cached) : { sortType: 'level_desc', filterType: null };
-  } catch (error) {
-    logger.warn('Could not load user inventory preferences:', error);
-    return { sortType: 'level_desc', filterType: null };
-  }
-}
-
-/**
- * 🎨 Créer une barre de progression visuelle
- */
-function createProgressBar(current: number, max: number, length: number = 10): string {
-  const percentage = Math.min(current / max, 1);
-  const filledLength = Math.round(length * percentage);
-  const emptyLength = length - filledLength;
-  
-  const filled = '█'.repeat(filledLength);
-  const empty = '░'.repeat(emptyLength);
-  
-  return `[${filled}${empty}] ${Math.round(percentage * 100)}%`;
-}
-
-/**
- * 📈 Calculer les tendances de performance
- */
-function calculatePerformanceTrends(machines: any[]) {
-  const trends = {
-    totalMachines: machines.length,
-    avgLevel: 0,
-    avgEfficiency: 0,
-    avgDurability: 0,
-    highPerformanceCount: 0,
-    needMaintenanceCount: 0,
-    upgradeableCount: 0
-  };
-  
-  if (machines.length === 0) return trends;
-  
-  trends.avgLevel = machines.reduce((sum, m) => sum + m.level, 0) / machines.length;
-  trends.avgEfficiency = machines.reduce((sum, m) => sum + m.efficiency, 0) / machines.length;
-  trends.avgDurability = machines.reduce((sum, m) => sum + m.durability, 0) / machines.length;
-  
-  trends.highPerformanceCount = machines.filter(m => m.level >= 7 && m.efficiency >= 85).length;
-  trends.needMaintenanceCount = machines.filter(m => m.durability < 50).length;
-  trends.upgradeableCount = machines.filter(m => m.level < 10).length;
-  
-  return trends;
-}
-
-/**
- * 💡 Générer des conseils intelligents
- */
-function generateSmartRecommendations(data: any): string[] {
-  const recommendations = [];
-  const trends = calculatePerformanceTrends(data.machines);
-  
-  // Conseils basés sur l'efficacité moyenne
-  if (trends.avgEfficiency < 70) {
-    recommendations.push('🔧 Votre efficacité moyenne est faible. Pensez à effectuer des réparations.');
-  } else if (trends.avgEfficiency >= 90) {
-    recommendations.push('🌟 Excellente efficacité ! Continuez cette maintenance optimale.');
-  }
-  
-  // Conseils basés sur la durabilité
-  if (trends.needMaintenanceCount > trends.totalMachines * 0.3) {
-    recommendations.push(`⚠️ ${trends.needMaintenanceCount} machines nécessitent une attention urgente.`);
-  }
-  
-  // Conseils d'investissement
-  if (trends.avgLevel < 3 && data.user.tokens > 1000) {
-    recommendations.push('📈 Vous avez les moyens d\'améliorer vos machines pour augmenter la production.');
-  }
-  
-  // Conseils d'optimisation énergétique
-  if (data.energyConsumption > 100 && trends.avgEfficiency < 80) {
-    recommendations.push('⚡ Optimisez l\'efficacité avant d\'investir dans plus de machines.');
-  }
-  
-  // Conseils de diversification
-  const uniqueTypes = new Set(data.machines.map((m: any) => m.type)).size;
-  if (uniqueTypes < 3 && data.machines.length > 5) {
-    recommendations.push('🎯 Diversifiez vos types de machines pour optimiser les rendements.');
-  }
-  
-  return recommendations.slice(0, 4); // Maximum 4 conseils
-}
-
-/**
- * 🔄 Mise à jour automatique des données en temps réel
- */
-async function refreshInventoryData(userId: string, services: Map<string, any>) {
-  try {
-    const databaseService = services.get('database');
-    
-    const updatedUser = await databaseService.client.user.findUnique({
-      where: { discordId: userId },
-      include: { 
-        machines: {
-          orderBy: { createdAt: 'desc' }
-        },
-        transactions: {
-          where: {
-            type: {
-              in: ['MACHINE_PURCHASE', 'MACHINE_UPGRADE', 'MACHINE_REPAIR']
-            }
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 5
-        }
-      }
-    });
-    
-    return updatedUser;
-  } catch (error) {
-    logger.error('Error refreshing inventory data:', error);
-    return null;
-  }
 }
